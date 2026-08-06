@@ -1052,27 +1052,15 @@ window.onload = async () => {
       setDot('dot-drive', d.ready);
       const btn  = document.getElementById('drive-auth-btn');
       const hint = document.getElementById('drive-hint');
-      if (!d.libs_ok) {
-        hint.innerHTML = 'Run: <code>pip install google-api-python-client google-auth-oauthlib</code>';
-        btn.textContent = 'Install libs first';
-        btn.disabled = true;
-      } else if (d.service_account) {
-        btn.textContent = 'Drive connected (service account)';
-        btn.disabled = true;
-        hint.innerHTML = 'Folder: <a href="https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E" target="_blank" style="color:var(--blue)">Open in Drive</a>';
-        document.getElementById('drive-toggle').disabled = false;
-      } else if (d.oauth_token) {
-        btn.textContent = 'Drive connected (OAuth)';
+      if (d.ready) {
+        btn.textContent = 'Drive connected (Apps Script)';
         btn.disabled = true;
         hint.innerHTML = 'Folder: <a href="https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E" target="_blank" style="color:var(--blue)">Open in Drive</a>';
         document.getElementById('drive-toggle').disabled = false;
       } else {
-        btn.textContent = 'Connect Google Drive';
-        hint.innerHTML = `<b>One-time setup:</b><br>
-1. <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" style="color:var(--blue)">Create a service account</a> in Google Cloud<br>
-2. Download its JSON key → save as <code>service_account.json</code> in py Scripts/<br>
-3. Share your Drive folder with the service account email<br>
-4. Click Connect below`;
+        btn.textContent = 'Drive not configured';
+        btn.disabled = true;
+        hint.innerHTML = 'Apps Script URL not set. Contact developer.';
       }
     } catch(e) { setDot('dot-drive', false); }
   } catch(e) {
