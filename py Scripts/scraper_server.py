@@ -1006,12 +1006,6 @@ HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <div>
-      <div class="field-label">Output Directory</div>
-      <input type="text" class="path-input" id="out-dir"
-             id="out-dir-input" value="~/Downloads/Novels" placeholder="~/Downloads/Novels" />
-    </div>
-
     <div class="scraper-info" id="scraper-info">
       Run Detect first to see scraper details.
     </div>
@@ -1209,7 +1203,7 @@ async function startScrape() {
 
   const startCh = parseInt(document.getElementById('start-ch').value) || 1;
   const endCh   = parseInt(document.getElementById('end-ch').value)   || 100;
-  const outDir  = document.getElementById('out-dir').value.trim() || '~/Downloads/Novels';
+  const outDir  = '';
 
   if (startCh > endCh) { log('Start chapter must be <= end chapter.', 'err'); return; }
 
