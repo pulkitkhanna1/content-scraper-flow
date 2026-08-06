@@ -50,7 +50,9 @@ except Exception as _e:
     ROUTER_OK = False
     _ROUTER_ERR = str(_e)
 
-PORT = 7799
+PORT = int(os.environ.get("PORT", 7799))
+IS_SERVER = os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RENDER") or os.environ.get("SERVER_MODE")
+DEFAULT_OUT_DIR = os.environ.get("OUT_DIR", "/tmp/novels" if IS_SERVER else str(Path.home() / "Downloads" / "Novels"))
 app = Flask(__name__)
 
 HEADERS = {
@@ -64,14 +66,18 @@ HEADERS = {
 }
 CHAPTERS_PER_FILE = 100
 
-GDRIVE_FOLDER_ID = "1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E"
-GDRIVE_SCOPES    = ["https://www.googleapis.com/auth/drive.file"]
-CREDS_FILE       = SCRIPT_DIR / "credentials.json"
-TOKEN_FILE       = SCRIPT_DIR / "gdrive_token.json"
+GDRIVE_FOLDER_ID   = "1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E"
+GDRIVE_SCOPES      = ["https://www.googleapis.com/auth/drive.file"]
+# Service account key — simplest: no browser, just this one file
+SERVICE_ACCOUNT_FILE = SCRIPT_DIR / "service_account.json"
+# OAuth2 fallback (legacy)
+CREDS_FILE         = SCRIPT_DIR / "credentials.json"
+TOKEN_FILE         = SCRIPT_DIR / "gdrive_token.json"
 
 try:
     from googleapiclient.discovery import build as _gdrive_build
     from googleapiclient.http import MediaFileUpload
+    from google.oauth2 import service_account as _sa
     from google.auth.transport.requests import Request as _GRequest
     from google.oauth2.credentials import Credentials as _GCreds
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -81,7 +87,19 @@ except ImportError:
 
 
 def _get_drive_service():
-    """Return authenticated Drive v3 service, running OAuth flow if needed."""
+    """
+    Return authenticated Drive v3 service.
+    Prefers service_account.json (no browser needed).
+    Falls back to OAuth2 credentials.json flow.
+    """
+    # ── Service account (preferred) ───────────────────────────────────────────
+    if SERVICE_ACCOUNT_FILE.exists():
+        creds = _sa.Credentials.from_service_account_file(
+            str(SERVICE_ACCOUNT_FILE), scopes=GDRIVE_SCOPES
+        )
+        return _gdrive_build("drive", "v3", credentials=creds)
+
+    # ── OAuth2 fallback ───────────────────────────────────────────────────────
     creds = None
     if TOKEN_FILE.exists():
         creds = _GCreds.from_authorized_user_file(str(TOKEN_FILE), GDRIVE_SCOPES)
@@ -91,8 +109,8 @@ def _get_drive_service():
         else:
             if not CREDS_FILE.exists():
                 raise FileNotFoundError(
-                    f"credentials.json not found at {CREDS_FILE}\n"
-                    "Download it from: Google Cloud Console → APIs & Services → Credentials"
+                    "No credentials found. Add service_account.json to py Scripts/\n"
+                    "See: Google Cloud Console → IAM → Service Accounts → Create → Download JSON"
                 )
             flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_FILE), GDRIVE_SCOPES)
             creds = flow.run_local_server(port=0)
@@ -532,7 +550,7 @@ def api_scrape():
     platform   = result.get("platform", "")
     start_ch   = int(data.get("start_ch", 1))
     end_ch     = int(data.get("end_ch", 100))
-    out_dir    = os.path.expanduser(data.get("out_dir", "~/Downloads/Novels"))
+    out_dir    = os.path.expanduser(data.get("out_dir") or DEFAULT_OUT_DIR)
     use_drive  = bool(data.get("upload_to_drive", False))
 
     if not platform:
@@ -550,11 +568,13 @@ def api_scrape():
 
 @app.route("/api/drive-status")
 def api_drive_status():
+    sa_exists = SERVICE_ACCOUNT_FILE.exists()
     return jsonify({
-        "libs_ok":      GDRIVE_LIBS_OK,
-        "creds_exists": CREDS_FILE.exists(),
-        "token_exists": TOKEN_FILE.exists(),
-        "folder_id":    GDRIVE_FOLDER_ID,
+        "libs_ok":           GDRIVE_LIBS_OK,
+        "service_account":   sa_exists,
+        "oauth_token":       TOKEN_FILE.exists(),
+        "ready":             GDRIVE_LIBS_OK and (sa_exists or TOKEN_FILE.exists()),
+        "folder_id":         GDRIVE_FOLDER_ID,
     })
 
 
@@ -1015,7 +1035,7 @@ HTML = """<!DOCTYPE html>
     <div>
       <div class="field-label">Output Directory</div>
       <input type="text" class="path-input" id="out-dir"
-             value="~/Downloads/Novels" placeholder="~/Downloads/Novels" />
+             id="out-dir-input" value="~/Downloads/Novels" placeholder="~/Downloads/Novels" />
     </div>
 
     <div class="scraper-info" id="scraper-info">
@@ -1084,20 +1104,30 @@ window.onload = async () => {
     // Drive status
     try {
       const d = await fetch('/api/drive-status').then(r => r.json());
-      const driveReady = d.libs_ok && d.token_exists;
-      setDot('dot-drive', driveReady);
-      const btn = document.getElementById('drive-auth-btn');
+      setDot('dot-drive', d.ready);
+      const btn  = document.getElementById('drive-auth-btn');
       const hint = document.getElementById('drive-hint');
       if (!d.libs_ok) {
-        btn.textContent = 'Install Drive libs first';
-        hint.innerHTML += '<br>Run: pip install google-api-python-client google-auth-oauthlib';
-      } else if (!d.creds_exists) {
-        btn.textContent = 'Add credentials.json to py Scripts/';
-        hint.innerHTML += '<br>Download from Google Cloud Console';
-      } else if (driveReady) {
-        btn.textContent = 'Drive connected';
+        hint.innerHTML = 'Run: <code>pip install google-api-python-client google-auth-oauthlib</code>';
+        btn.textContent = 'Install libs first';
         btn.disabled = true;
+      } else if (d.service_account) {
+        btn.textContent = 'Drive connected (service account)';
+        btn.disabled = true;
+        hint.innerHTML = 'Folder: <a href="https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E" target="_blank" style="color:var(--blue)">Open in Drive</a>';
         document.getElementById('drive-toggle').disabled = false;
+      } else if (d.oauth_token) {
+        btn.textContent = 'Drive connected (OAuth)';
+        btn.disabled = true;
+        hint.innerHTML = 'Folder: <a href="https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E" target="_blank" style="color:var(--blue)">Open in Drive</a>';
+        document.getElementById('drive-toggle').disabled = false;
+      } else {
+        btn.textContent = 'Connect Google Drive';
+        hint.innerHTML = `<b>One-time setup:</b><br>
+1. <a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" style="color:var(--blue)">Create a service account</a> in Google Cloud<br>
+2. Download its JSON key → save as <code>service_account.json</code> in py Scripts/<br>
+3. Share your Drive folder with the service account email<br>
+4. Click Connect below`;
       }
     } catch(e) { setDot('dot-drive', false); }
   } catch(e) {
@@ -1376,5 +1406,6 @@ if __name__ == "__main__":
     url = f"http://localhost:{PORT}"
     print(f"Starting Novel Scraper at {url}")
     print("Press Ctrl+C to stop.\n")
-    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    app.run(host="localhost", port=PORT, debug=False, threaded=True)
+    if not IS_SERVER:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)

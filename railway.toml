@@ -1,0 +1,6 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python \"py Scripts/scraper_server.py\""
+restartPolicyType = "ON_FAILURE"
