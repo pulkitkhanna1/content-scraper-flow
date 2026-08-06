@@ -995,23 +995,17 @@ HTML = """<!DOCTYPE html>
         &#9632;&nbsp; Stop
       </button>
       <button class="btn-ghost" onclick="openFolder()">
-        &#128193;&nbsp; Open Output Folder
+        &#128193;&nbsp; Open Drive Folder
       </button>
     </div>
 
     <div style="border-top:1px solid var(--border);padding-top:12px;margin-top:2px">
       <div class="field-label" style="margin-bottom:8px">Google Drive</div>
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px">
-        <input type="checkbox" id="drive-toggle" style="width:15px;height:15px;accent-color:var(--blue)">
-        <span style="font-size:13px;color:var(--fg)">Upload to Drive after each 100 chapters</span>
-      </label>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5" id="drive-hint">
+      <div style="font-size:12px;color:var(--muted);line-height:1.5" id="drive-hint">
+        Files upload automatically after each 100 chapters.<br>
         Folder: <a href="https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E"
                    target="_blank" style="color:var(--blue)">Open in Drive</a>
       </div>
-      <button class="btn-ghost" style="width:100%;font-size:12px" onclick="authDrive()" id="drive-auth-btn">
-        Connect Google Drive
-      </button>
     </div>
     <div style="display:none">
     </div>
@@ -1050,18 +1044,6 @@ window.onload = async () => {
     try {
       const d = await fetch('/api/drive-status').then(r => r.json());
       setDot('dot-drive', d.ready);
-      const btn  = document.getElementById('drive-auth-btn');
-      const hint = document.getElementById('drive-hint');
-      if (d.ready) {
-        btn.textContent = 'Drive connected (Apps Script)';
-        btn.disabled = true;
-        hint.innerHTML = 'Folder: <a href="https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E" target="_blank" style="color:var(--blue)">Open in Drive</a>';
-        document.getElementById('drive-toggle').disabled = false;
-      } else {
-        btn.textContent = 'Drive not configured';
-        btn.disabled = true;
-        hint.innerHTML = 'Apps Script URL not set. Contact developer.';
-      }
     } catch(e) { setDot('dot-drive', false); }
   } catch(e) {
     log('Could not reach server: ' + e, 'err');
@@ -1215,7 +1197,7 @@ async function startScrape() {
         start_ch: startCh,
         end_ch:   endCh,
         out_dir:  outDir,
-        upload_to_drive: document.getElementById('drive-toggle').checked,
+        upload_to_drive: true,
       })
     });
     const data = await res.json();
@@ -1254,28 +1236,6 @@ function startLogStream(jobId) {
   };
 }
 
-async function authDrive() {
-  const btn = document.getElementById('drive-auth-btn');
-  btn.textContent = 'Opening browser for auth...';
-  btn.disabled = true;
-  try {
-    const res = await fetch('/api/drive-auth', {method:'POST'}).then(r => r.json());
-    if (res.ok) {
-      log('Google Drive authorised.', 'ok');
-      setDot('dot-drive', true);
-      btn.textContent = 'Drive connected';
-      document.getElementById('drive-toggle').disabled = false;
-    } else {
-      log('Drive auth failed: ' + res.error, 'err');
-      btn.textContent = 'Connect Google Drive';
-      btn.disabled = false;
-    }
-  } catch(e) {
-    log('Drive auth error: ' + e, 'err');
-    btn.textContent = 'Connect Google Drive';
-    btn.disabled = false;
-  }
-}
 
 async function stopScrape() {
   if (!currentJobId) return;
@@ -1291,14 +1251,8 @@ function scrapeDone() {
   currentJobId = null;
 }
 
-async function openFolder() {
-  const path = document.getElementById('out-dir').value.trim() || '~/Downloads/Novels';
-  const res = await fetch('/api/open-folder', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ path })
-  }).then(r => r.json());
-  if (!res.ok) log('Could not open folder: ' + (res.error || '?'), 'err');
+function openFolder() {
+  window.open('https://drive.google.com/drive/folders/1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E', '_blank');
 }
 
 // ── Log helpers ───────────────────────────────────────────────────────────────
