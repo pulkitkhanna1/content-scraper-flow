@@ -81,7 +81,7 @@ def upload_to_drive(file_path: str, folder_id: str, log_fn):
         name = Path(file_path).name
         with open(file_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
-        resp = requests.post(
+        resp = _requests.post(
             APPS_SCRIPT_URL,
             json={"filename": name, "content": encoded, "folder_id": folder_id},
             timeout=60,
@@ -530,7 +530,7 @@ def api_drive_auth():
     if not APPS_SCRIPT_URL:
         return jsonify({"ok": False, "error": "APPS_SCRIPT_URL not set."})
     try:
-        resp = requests.get(APPS_SCRIPT_URL, timeout=10)
+        resp = _requests.get(APPS_SCRIPT_URL, timeout=10)
         result = resp.json()
         if result.get("status") == "ok":
             return jsonify({"ok": True, "message": "Apps Script reachable."})
