@@ -485,7 +485,7 @@ def extract_metadata_freewebnovel(url: str) -> dict:
     path = parsed.path
     m = re.search(r"/novel/([^/]+)", path)
     slug = m.group(1) if m else None
-    book_url = f"https://freewebnovel.com/novel/{slug}/" if slug else url
+    book_url = f"https://freewebnovel.com/novel/{slug}" if slug else url
 
     soup = _fetch_html(book_url)
     if not soup:
@@ -532,14 +532,33 @@ def extract_metadata_wuxiaworld(url: str) -> dict:
     author = _text(soup, ".author a", "[class*='author']")
     desc = _text(soup, ".review-content p", ".novel-synopsis p", ".description p")
 
+    # Extract book slug and first chapter URL
+    import re as _re
+    slug_m = _re.search(r"/novel/([^/?#]+)", url)
+    slug = slug_m.group(1) if slug_m else None
+    first_chapter_url = ""
+    chapter_count = 0
+    if soup and slug:
+        ch_links = _re.findall(rf'href="(/novel/{slug}/{slug}-chapter-(\d+))"', str(soup))
+        if ch_links:
+            ch_links_sorted = sorted(set(ch_links), key=lambda x: int(x[1]))
+            first_chapter_url = f"https://www.wuxiaworld.com{ch_links_sorted[0][0]}"
+
+    # Chapter count from page text (more reliable than link counting)
+    ct_m = _re.search(r"(\d{3,5})\s*[Cc]hap", soup.get_text() if soup else "")
+    if ct_m:
+        chapter_count = int(ct_m.group(1))
+
     return {
         "book_name": title,
         "author": author,
-        "chapter_count": 0,
+        "chapter_count": chapter_count,
         "description": desc,
         "cover_url": "",
         "scraper_args": {
             "url": url,
+            "slug": slug,
+            "first_chapter_url": first_chapter_url,
         },
     }
 

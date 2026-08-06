@@ -145,6 +145,104 @@ def _write_metadata_docx(book_dir, result, book_name, platform, start_ch, end_ch
     return path
 
 
+def scrape_allnovel(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
+    """Scrape allnovel.org — works with plain requests (no Cloudflare)."""
+    safe = _safe_name(book_name)
+    book_dir = os.path.join(out_dir, "scraped_novels", safe)
+    os.makedirs(book_dir, exist_ok=True)
+    log(f"Output: {book_dir}")
+
+    ch_num = start_ch
+    file_idx = (ch_num - 1) // CHAPTERS_PER_FILE + 1
+    ch_in_file = (ch_num - 1) % CHAPTERS_PER_FILE
+    out_path = _file_path(book_dir, safe, file_idx)
+    doc = Document(out_path) if os.path.exists(out_path) else Document()
+    url = start_url
+
+    while url and ch_num <= end_ch:
+        if stop.is_set():
+            break
+        for attempt in range(1, 4):
+            try:
+                resp = _requests.get(url, headers=HEADERS, timeout=15)
+                if resp.status_code == 404:
+                    log(f"  Chapter {ch_num}: 404 — no more chapters")
+                    url = None
+                    break
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+
+                # Title — h2 with chapter name
+                title_el = soup.find("h2") or soup.find("h1")
+                title = title_el.get_text(strip=True) if title_el else f"Chapter {ch_num}"
+
+                # Content in div.chapter.container or div.chapter-content
+                content = soup.select_one("div.chapter.container, div.chapter-content, div#chapter-content")
+                paragraphs = []
+                if content:
+                    for p in content.find_all("p"):
+                        text = p.get_text(strip=True)
+                        if text and len(text) > 10:
+                            paragraphs.append(text)
+
+                if not paragraphs:
+                    log(f"  Chapter {ch_num}: no content, skipping")
+                    ch_num += 1
+                    url = None
+                    break
+
+                doc.add_heading(title, level=1)
+                count = 0
+                for para in paragraphs:
+                    doc.add_paragraph(para)
+                    count += 1
+
+                doc.save(out_path)
+                log(f"  Saved: {title} ({count} paragraphs)")
+
+                # Next chapter link — find "next chapter" anchor
+                next_href = None
+                for a in soup.find_all("a", href=True):
+                    if "next" in a.get_text(strip=True).lower() and "chapter" in a.get("href", ""):
+                        next_href = a.get("href")
+                        break
+
+                if next_href:
+                    url = next_href if next_href.startswith("http") else f"https://allnovel.org{next_href}"
+                else:
+                    url = None
+
+                ch_num += 1
+                ch_in_file += 1
+
+                if ch_num <= end_ch and ch_in_file >= CHAPTERS_PER_FILE:
+                    completed = out_path
+                    log("100 chapters done — starting new file...")
+                    file_idx += 1
+                    ch_in_file = 0
+                    out_path = _file_path(book_dir, safe, file_idx)
+                    doc = Document()
+                    if on_file_complete:
+                        on_file_complete(completed)
+
+                time.sleep(1)
+                break
+
+            except Exception as exc:
+                if attempt < 3:
+                    log(f"  Error (attempt {attempt}/3): {exc}, retrying...")
+                    time.sleep(5 * attempt)
+                else:
+                    log(f"  Skipping chapter {ch_num}: {exc}")
+                    ch_num += 1
+                    break
+
+    doc.save(out_path)
+    if on_file_complete:
+        on_file_complete(out_path)
+    log(f"Done. Files saved in: {book_dir}")
+
+
 def scrape_novelbin(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
     safe = _safe_name(book_name)
     book_dir = os.path.join(out_dir, "scraped_novels", safe)
@@ -359,6 +457,109 @@ def scrape_royalroad(start_url, book_name, start_ch, end_ch, out_dir, log, stop,
         on_file_complete(out_path)
 
 
+def scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
+    safe = _safe_name(book_name)
+    book_dir = os.path.join(out_dir, "scraped_novels", safe)
+    os.makedirs(book_dir, exist_ok=True)
+    log(f"Output: {book_dir}")
+
+    ch_num = start_ch
+    file_idx = (ch_num - 1) // CHAPTERS_PER_FILE + 1
+    ch_in_file = (ch_num - 1) % CHAPTERS_PER_FILE
+    out_path = _file_path(book_dir, safe, file_idx)
+    doc = Document(out_path) if os.path.exists(out_path) else Document()
+    url = start_url
+
+    while ch_num <= end_ch and url:
+        if stop.is_set():
+            break
+        for attempt in range(1, 4):
+            try:
+                resp = _requests.get(url, headers=HEADERS, timeout=15)
+                if resp.status_code == 404:
+                    log(f"  Chapter {ch_num}: 404 — no more chapters")
+                    url = None
+                    break
+                resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+
+                # Title: h4 with "Chapter" text, fallback to <title>
+                title = ""
+                for h in soup.find_all(["h4", "h3", "h2"]):
+                    t = h.get_text(strip=True)
+                    if "Chapter" in t:
+                        title = t
+                        break
+                if not title:
+                    t_tag = soup.find("title")
+                    if t_tag:
+                        parts = t_tag.get_text().split(" - ", 1)
+                        title = parts[1].strip() if len(parts) > 1 else f"Chapter {ch_num}"
+
+                # Content
+                cc = soup.select_one("div.chapter-content")
+                paragraphs = []
+                if cc:
+                    for p in cc.find_all("p"):
+                        text = p.get_text(strip=True)
+                        if text:
+                            paragraphs.append(text)
+
+                if not paragraphs:
+                    log(f"  Chapter {ch_num}: no content, skipping")
+                    ch_num += 1
+                    url = None
+                    break
+
+                doc.add_heading(title or f"Chapter {ch_num}", level=1)
+                count = 0
+                for para in paragraphs:
+                    doc.add_paragraph(para)
+                    count += 1
+
+                doc.save(out_path)
+                log(f"  Saved: {title} ({count} paragraphs)")
+
+                # Next: find any link to next chapter number on the page
+                next_ch = ch_num + 1
+                slug_m = re.search(r"/novel/([^/]+)/", url)
+                slug = slug_m.group(1) if slug_m else None
+                if slug:
+                    url = f"https://www.wuxiaworld.com/novel/{slug}/{slug}-chapter-{next_ch}"
+                else:
+                    url = None
+
+                ch_num += 1
+                ch_in_file += 1
+
+                if ch_num <= end_ch and ch_in_file >= CHAPTERS_PER_FILE:
+                    completed = out_path
+                    log("100 chapters done — starting new file...")
+                    file_idx += 1
+                    ch_in_file = 0
+                    out_path = _file_path(book_dir, safe, file_idx)
+                    doc = Document()
+                    if on_file_complete:
+                        on_file_complete(completed)
+
+                time.sleep(1)
+                break
+
+            except Exception as exc:
+                if attempt < 3:
+                    log(f"  Error (attempt {attempt}/3): {exc}, retrying...")
+                    time.sleep(5 * attempt)
+                else:
+                    log(f"  Skipping chapter {ch_num}: {exc}")
+                    ch_num += 1
+                    break
+
+    doc.save(out_path)
+    if on_file_complete:
+        on_file_complete(out_path)
+    log(f"Done. Files saved in: {book_dir}")
+
+
 def scrape_freewebnovel(book_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
     safe = _safe_name(book_name)
     book_dir = os.path.join(out_dir, "scraped_novels", safe)
@@ -472,9 +673,11 @@ def run_subprocess(cmd, log, stop, cwd=None):
 
 PLATFORM_MODE = {
     "novelbin":     "inline",
+    "allnovel":     "inline",
     "royalroad":    "inline",
-    "freewebnovel": "inline",
+    "freewebnovel": "hardcoded",
     "webnovel":     "hardcoded",
+    "wuxiaworld":   "inline",
     "69shuba":      "hardcoded",
     "babelnovel":   "hardcoded",
     "tapas":        "hardcoded",
@@ -517,6 +720,10 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
             url = scraper_args.get("start_url") or result.get("canonical_url")
             scrape_novelbin(url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
 
+        elif mode == "inline" and platform == "allnovel":
+            url = scraper_args.get("start_url") or result.get("canonical_url")
+            scrape_allnovel(url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
+
         elif mode == "inline" and platform == "royalroad":
             url = scraper_args.get("url") or result.get("canonical_url")
             scrape_royalroad(url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
@@ -524,6 +731,15 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
         elif mode == "inline" and platform == "freewebnovel":
             book_url = scraper_args.get("book_url") or result.get("canonical_url")
             scrape_freewebnovel(book_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
+
+        elif mode == "inline" and platform == "wuxiaworld":
+            slug = scraper_args.get("slug")
+            first_ch_url = scraper_args.get("first_chapter_url", "")
+            if slug:
+                start_url = f"https://www.wuxiaworld.com/novel/{slug}/{slug}-chapter-{start_ch}"
+            else:
+                start_url = first_ch_url or result.get("canonical_url")
+            scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
 
         else:
             # Browser-based: show config guide
