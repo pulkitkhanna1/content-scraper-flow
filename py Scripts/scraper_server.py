@@ -601,6 +601,7 @@ HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Novel Scraper</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%23E8001D'/%3E%3Ctext x='16' y='23' font-family='Arial,sans-serif' font-size='17' font-weight='bold' text-anchor='middle' fill='white'%3ELS%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg:      #0f1117;
