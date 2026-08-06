@@ -67,82 +67,30 @@ HEADERS = {
 CHAPTERS_PER_FILE = 100
 
 GDRIVE_FOLDER_ID   = "1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E"
-GDRIVE_SCOPES      = ["https://www.googleapis.com/auth/drive.file"]
-# Service account key — simplest: no browser, just this one file
-SERVICE_ACCOUNT_FILE = SCRIPT_DIR / "service_account.json"
-# OAuth2 fallback (legacy)
-CREDS_FILE         = SCRIPT_DIR / "credentials.json"
-TOKEN_FILE         = SCRIPT_DIR / "gdrive_token.json"
-
-try:
-    from googleapiclient.discovery import build as _gdrive_build
-    from googleapiclient.http import MediaFileUpload
-    from google.oauth2 import service_account as _sa
-    from google.auth.transport.requests import Request as _GRequest
-    from google.oauth2.credentials import Credentials as _GCreds
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    GDRIVE_LIBS_OK = True
-except ImportError:
-    GDRIVE_LIBS_OK = False
-
-
-def _get_drive_service():
-    """
-    Return authenticated Drive v3 service.
-    Prefers service_account.json (no browser needed).
-    Falls back to OAuth2 credentials.json flow.
-    """
-    # ── Service account (preferred) ───────────────────────────────────────────
-    if SERVICE_ACCOUNT_FILE.exists():
-        creds = _sa.Credentials.from_service_account_file(
-            str(SERVICE_ACCOUNT_FILE), scopes=GDRIVE_SCOPES
-        )
-        return _gdrive_build("drive", "v3", credentials=creds)
-
-    # ── OAuth2 fallback ───────────────────────────────────────────────────────
-    creds = None
-    if TOKEN_FILE.exists():
-        creds = _GCreds.from_authorized_user_file(str(TOKEN_FILE), GDRIVE_SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(_GRequest())
-        else:
-            if not CREDS_FILE.exists():
-                raise FileNotFoundError(
-                    "No credentials found. Add service_account.json to py Scripts/\n"
-                    "See: Google Cloud Console → IAM → Service Accounts → Create → Download JSON"
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(str(CREDS_FILE), GDRIVE_SCOPES)
-            creds = flow.run_local_server(port=0)
-        TOKEN_FILE.write_text(creds.to_json())
-    return _gdrive_build("drive", "v3", credentials=creds)
+# Apps Script web app URL — set via env var or paste directly
+APPS_SCRIPT_URL    = os.environ.get("APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbxVW8CYPPopNWZvM3IKEuwjYqrWSzs_6tznwMsQj6gjT7h1antrYwxIzSNQhcfYHU0u/exec")
 
 
 def upload_to_drive(file_path: str, folder_id: str, log_fn):
-    """Upload a .docx to the Drive folder; updates the file if it already exists."""
-    if not GDRIVE_LIBS_OK:
-        log_fn("Drive upload skipped — run: pip install google-api-python-client google-auth-oauthlib")
+    """Upload a .docx via Apps Script web app — no API keys needed."""
+    if not APPS_SCRIPT_URL:
+        log_fn("Drive upload skipped — set APPS_SCRIPT_URL env var first.")
         return
+    import base64
     try:
-        service = _get_drive_service()
         name = Path(file_path).name
-        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-
-        existing = service.files().list(
-            q=f"name='{name}' and '{folder_id}' in parents and trashed=false",
-            fields="files(id)"
-        ).execute().get("files", [])
-
-        media = MediaFileUpload(file_path, mimetype=mime, resumable=True)
-        if existing:
-            service.files().update(fileId=existing[0]["id"], media_body=media).execute()
-            log_fn(f"  Drive: updated  {name}")
-        else:
-            service.files().create(
-                body={"name": name, "parents": [folder_id]},
-                media_body=media, fields="id"
-            ).execute()
+        with open(file_path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        resp = requests.post(
+            APPS_SCRIPT_URL,
+            json={"filename": name, "content": encoded, "folder_id": folder_id},
+            timeout=60,
+        )
+        result = resp.json()
+        if result.get("status") == "ok":
             log_fn(f"  Drive: uploaded {name}")
+        else:
+            log_fn(f"  Drive upload failed: {result.get('message', resp.text)}")
     except Exception as exc:
         log_fn(f"  Drive upload failed: {exc}")
 
@@ -568,28 +516,25 @@ def api_scrape():
 
 @app.route("/api/drive-status")
 def api_drive_status():
-    sa_exists = SERVICE_ACCOUNT_FILE.exists()
+    ready = bool(APPS_SCRIPT_URL)
     return jsonify({
-        "libs_ok":           GDRIVE_LIBS_OK,
-        "service_account":   sa_exists,
-        "oauth_token":       TOKEN_FILE.exists(),
-        "ready":             GDRIVE_LIBS_OK and (sa_exists or TOKEN_FILE.exists()),
-        "folder_id":         GDRIVE_FOLDER_ID,
+        "ready":     ready,
+        "url_set":   ready,
+        "folder_id": GDRIVE_FOLDER_ID,
     })
 
 
 @app.route("/api/drive-auth", methods=["POST"])
 def api_drive_auth():
-    """Trigger OAuth2 browser flow to authorise Drive access."""
-    if not GDRIVE_LIBS_OK:
-        return jsonify({"ok": False,
-                        "error": "Run: pip install google-api-python-client google-auth-oauthlib"})
-    if not CREDS_FILE.exists():
-        return jsonify({"ok": False,
-                        "error": f"credentials.json not found at {CREDS_FILE}"})
+    """Test the Apps Script URL is reachable."""
+    if not APPS_SCRIPT_URL:
+        return jsonify({"ok": False, "error": "APPS_SCRIPT_URL not set."})
     try:
-        _get_drive_service()
-        return jsonify({"ok": True, "message": "Google Drive authorised."})
+        resp = requests.get(APPS_SCRIPT_URL, timeout=10)
+        result = resp.json()
+        if result.get("status") == "ok":
+            return jsonify({"ok": True, "message": "Apps Script reachable."})
+        return jsonify({"ok": False, "error": str(result)})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)})
 
