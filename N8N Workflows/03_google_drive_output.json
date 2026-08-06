@@ -1,0 +1,109 @@
+{
+  "name": "Novel Scraper — 03 Google Drive Output + QC",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "save-batch",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-save",
+      "name": "Webhook: Save Batch",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst bookName = (body.book_name || 'Unknown Book').replace(/[\\/\\\\:*?\"<>|]/g, '_').trim();\nconst author = (body.author || 'Unknown').replace(/[\\/\\\\:*?\"<>|]/g, '_').trim();\nconst chStart = body.chapter_start || 1;\nconst chEnd = body.chapter_end || 100;\nconst batchIdx = body.batch_index || 1;\nconst totalBatches = body.total_batches || 1;\nconst content = body.content || '';\nconst qcIssues = body.qc_issues || [];\nconst emptyChapters = body.empty_chapters || [];\n\nconst filename = bookName + ' Ch' + String(chStart).padStart(3, '0') + '-' + chEnd + '.txt';\n\nlet qcBlock = '';\nif (qcIssues.length > 0) {\n  qcBlock = '\\n\\nQC REPORT\\n' + '='.repeat(40) + '\\n';\n  for (const issue of qcIssues) {\n    if (issue.type === 'empty') qcBlock += '[EMPTY] Chapter ' + issue.chapter + ': ' + issue.title + '\\n';\n    else if (issue.type === 'gap') qcBlock += '[GAP]   Missing ' + issue.missing + ' chapter(s) between Ch' + issue.from + ' and Ch' + issue.to + '\\n';\n  }\n  qcBlock += '\\nTotal issues: ' + qcIssues.length;\n}\n\nconst fullContent = [\n  'BOOK: ' + bookName,\n  'AUTHOR: ' + author,\n  'CHAPTERS: ' + chStart + '\\u2013' + chEnd,\n  'BATCH: ' + batchIdx + ' of ' + totalBatches,\n  'WORD COUNT: ' + (body.total_words ? body.total_words.toLocaleString() : 'N/A'),\n  'QC STATUS: ' + (qcIssues.length === 0 ? 'PASSED' : 'ISSUES FOUND (' + qcIssues.length + ')'),\n  'EMPTY CHAPTERS: ' + (emptyChapters.length > 0 ? emptyChapters.join(', ') : 'None'),\n  '',\n  content,\n  qcBlock,\n].join('\\n');\n\nconst base64 = Buffer.from(fullContent, 'utf8').toString('base64');\n\nreturn [{\n  json: {\n    filename,\n    book_name: bookName,\n    author,\n    chapter_start: chStart,\n    chapter_end: chEnd,\n    batch_index: batchIdx,\n    total_batches: totalBatches,\n    total_words: body.total_words || 0,\n    qc_issues: qcIssues,\n    qc_passed: qcIssues.length === 0,\n    empty_chapters: emptyChapters,\n    file_content: fullContent,\n    file_b64: base64,\n    file_mime: 'text/plain; charset=utf-8',\n    file_ext: 'txt'\n  }\n}];\n"
+      },
+      "id": "code-prepare-file",
+      "name": "Code: Prepare File + QC",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "name": "={{ $json.book_name }}",
+        "options": {}
+      },
+      "id": "gdrive-create-folder",
+      "name": "Google Drive: Create Book Folder",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [500, 300],
+      "credentials": { "googleDriveOAuth2Api": { "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID", "name": "Google Drive account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Re-attach binary after folder creation (binary is lost when passing through GDrive node)\nconst folderResult = $input.first().json;\nconst fileData = $('Code: Prepare File + QC').first().json;\n\nconst buffer = Buffer.from(fileData.file_b64, 'base64');\nconst binaryData = await this.helpers.prepareBinaryData(\n  buffer,\n  fileData.filename,\n  'text/plain; charset=utf-8'\n);\n\nreturn [{\n  json: {\n    ...fileData,\n    folder_id: folderResult.id,\n  },\n  binary: {\n    file_data: binaryData\n  }\n}];\n"
+      },
+      "id": "code-reattach-binary",
+      "name": "Code: Re-attach Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "name": "={{ $json.filename }}",
+        "driveId": { "mode": "list", "value": "My Drive" },
+        "folderId": { "mode": "id", "value": "={{ $json.folder_id }}" },
+        "binaryPropertyName": "file_data",
+        "options": {}
+      },
+      "id": "gdrive-upload",
+      "name": "Google Drive: Upload File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [1000, 300],
+      "credentials": { "googleDriveOAuth2Api": { "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID", "name": "Google Drive account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Code: Prepare File + QC').first().json;\nlet driveResult = {};\ntry { driveResult = $('Google Drive: Upload File').first().json; } catch (e) {}\n\nreturn [{ json: {\n  status: 'ok',\n  message: 'Batch ' + data.batch_index + '/' + data.total_batches + ' saved to Google Drive',\n  book_name: data.book_name,\n  filename: data.filename,\n  drive_file_id: driveResult.id || null,\n  drive_web_link: driveResult.webViewLink || null,\n  chapters: data.chapter_start + '\\u2013' + data.chapter_end,\n  total_words: data.total_words,\n  qc_passed: data.qc_passed,\n  qc_issues: data.qc_issues,\n  empty_chapters: data.empty_chapters,\n  batch_index: data.batch_index,\n  total_batches: data.total_batches,\n  is_last_batch: data.batch_index >= data.total_batches,\n}}];\n"
+      },
+      "id": "code-final-summary",
+      "name": "Code: Final Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond-done",
+      "name": "Respond: Done",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1500, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Save Batch": {
+      "main": [[ { "node": "Code: Prepare File + QC", "type": "main", "index": 0 } ]]
+    },
+    "Code: Prepare File + QC": {
+      "main": [[ { "node": "Google Drive: Create Book Folder", "type": "main", "index": 0 } ]]
+    },
+    "Google Drive: Create Book Folder": {
+      "main": [[ { "node": "Code: Re-attach Binary", "type": "main", "index": 0 } ]]
+    },
+    "Code: Re-attach Binary": {
+      "main": [[ { "node": "Google Drive: Upload File", "type": "main", "index": 0 } ]]
+    },
+    "Google Drive: Upload File": {
+      "main": [[ { "node": "Code: Final Summary", "type": "main", "index": 0 } ]]
+    },
+    "Code: Final Summary": {
+      "main": [[ { "node": "Respond: Done", "type": "main", "index": 0 } ]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

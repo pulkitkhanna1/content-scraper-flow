@@ -1,0 +1,174 @@
+{
+  "name": "Novel Scraper — 00 Platform Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scrape",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook: Input URL",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst rawUrl = (body.url || '').trim();\nconst startChapter = parseInt(body.start_chapter) || 1;\nconst endChapter = body.end_chapter ? parseInt(body.end_chapter) : null;\n\nif (!rawUrl) {\n  return [{ json: { status: 'error', error: 'Missing url in request body' } }];\n}\n\nlet host;\ntry {\n  const parsed = new URL(rawUrl);\n  host = parsed.hostname.toLowerCase();\n  if (host.startsWith('www.')) host = host.slice(4);\n} catch (e) {\n  return [{ json: { status: 'error', error: 'Invalid URL: ' + rawUrl } }];\n}\n\nconst PLATFORMS = {\n  'webnovel.com':     { platform: 'webnovel',     lang: 'en', needs_translation: false, scraper_type: 'http'  },\n  '69shuba.com':      { platform: '69shuba',      lang: 'zh', needs_translation: true,  scraper_type: 'apify' },\n  '69shu.com':        { platform: '69shuba',      lang: 'zh', needs_translation: true,  scraper_type: 'apify' },\n  'novelbin.com':     { platform: 'novelbin',     lang: 'en', needs_translation: false, scraper_type: 'http'  },\n  'freewebnovel.com': { platform: 'freewebnovel', lang: 'en', needs_translation: false, scraper_type: 'http'  },\n  'royalroad.com':    { platform: 'royalroad',    lang: 'en', needs_translation: false, scraper_type: 'http'  },\n  'wattpad.com':      { platform: 'wattpad',      lang: 'en', needs_translation: false, scraper_type: 'http'  },\n  'babelnovel.com':   { platform: 'babelnovel',   lang: 'en', needs_translation: false, scraper_type: 'apify' },\n  'tapas.io':         { platform: 'tapas',        lang: 'en', needs_translation: false, scraper_type: 'apify' },\n  'wuxiaworld.com':   { platform: 'wuxiaworld',   lang: 'en', needs_translation: false, scraper_type: 'apify' },\n  'kakao.com':        { platform: 'kakao',        lang: 'ko', needs_translation: true,  scraper_type: 'apify' },\n  'kakaopage.com':    { platform: 'kakao',        lang: 'ko', needs_translation: true,  scraper_type: 'apify' },\n  'qidian.com':       { platform: 'qidian',       lang: 'zh', needs_translation: true,  scraper_type: 'apify' },\n  'qdmm.com':         { platform: 'qdmm',         lang: 'zh', needs_translation: true,  scraper_type: 'apify' },\n  'hengyan.com':      { platform: 'hengyan',      lang: 'zh', needs_translation: true,  scraper_type: 'apify' },\n  'ihengyan.com':     { platform: 'hengyan',      lang: 'zh', needs_translation: true,  scraper_type: 'apify' }\n};\n\nconst config = PLATFORMS[host];\nif (!config) {\n  return [{ json: { status: 'error', error: 'Unsupported platform: ' + host, url: rawUrl, host } }];\n}\n\nlet bookPageUrl = rawUrl;\ntry {\n  const u = new URL(rawUrl);\n  if (config.platform === 'novelbin') {\n    const m = u.pathname.match(/\\/b\\/([^/]+)/);\n    if (m) bookPageUrl = 'https://novelbin.com/b/' + m[1];\n  }\n  if (config.platform === 'freewebnovel') {\n    const m = u.pathname.match(/\\/novel\\/([^/]+)/);\n    if (m) bookPageUrl = 'https://freewebnovel.com/novel/' + m[1] + '/';\n  }\n  if (config.platform === 'royalroad') {\n    const m = u.pathname.match(/\\/fiction\\/(\\d+)\\/([^/]+)/);\n    if (m) bookPageUrl = 'https://www.royalroad.com/fiction/' + m[1] + '/' + m[2];\n  }\n} catch (e) {}\n\nreturn [{ json: {\n  status: 'ok',\n  url: rawUrl,\n  book_page_url: bookPageUrl,\n  host,\n  platform: config.platform,\n  source_language: config.lang,\n  needs_translation: config.needs_translation,\n  scraper_type: config.scraper_type,\n  start_chapter: startChapter,\n  end_chapter: endChapter,\n  batch_size: 100\n}}];\n"
+      },
+      "id": "node-detector",
+      "name": "Code: Platform Detector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-error",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "error",
+              "operator": { "type": "string", "operation": "equals", "name": "filter.operator.equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-error",
+      "name": "IF: Is Error?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'error', message: $json.error }) }}"
+      },
+      "id": "node-respond-error",
+      "name": "Respond: Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [720, 160]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-translation",
+              "leftValue": "={{ $json.needs_translation }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "name": "filter.operator.true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-translation",
+      "name": "IF: Needs Translation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "PASTE_WORKFLOW_02_URL_HERE",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "node-call-wf02",
+      "name": "HTTP: Call Translation Finder (WF02)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-http",
+              "leftValue": "={{ $json.scraper_type }}",
+              "rightValue": "http",
+              "operator": { "type": "string", "operation": "equals", "name": "filter.operator.equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-http",
+      "name": "IF: HTTP Scraper?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [960, 540]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "PASTE_WORKFLOW_01_URL_HERE",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "node-call-wf01",
+      "name": "HTTP: Call HTTP Scraper (WF01)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 440]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"queued\", \"message\": \"Apify scraping coming soon\", \"platform\": \"{{ $json.platform }}\" }"
+      },
+      "id": "node-apify",
+      "name": "Respond: Apify (Coming Soon)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 640]
+    }
+  ],
+  "connections": {
+    "Webhook: Input URL": {
+      "main": [[{ "node": "Code: Platform Detector", "type": "main", "index": 0 }]]
+    },
+    "Code: Platform Detector": {
+      "main": [[{ "node": "IF: Is Error?", "type": "main", "index": 0 }]]
+    },
+    "IF: Is Error?": {
+      "main": [
+        [{ "node": "Respond: Error", "type": "main", "index": 0 }],
+        [{ "node": "IF: Needs Translation?", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF: Needs Translation?": {
+      "main": [
+        [{ "node": "HTTP: Call Translation Finder (WF02)", "type": "main", "index": 0 }],
+        [{ "node": "IF: HTTP Scraper?", "type": "main", "index": 0 }]
+      ]
+    },
+    "IF: HTTP Scraper?": {
+      "main": [
+        [{ "node": "HTTP: Call HTTP Scraper (WF01)", "type": "main", "index": 0 }],
+        [{ "node": "Respond: Apify (Coming Soon)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" }
+}

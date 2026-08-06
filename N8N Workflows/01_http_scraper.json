@@ -1,0 +1,218 @@
+{
+  "name": "Novel Scraper — 01 HTTP Scraper (No-Chrome Platforms)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "scrape-http",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-http",
+      "name": "Webhook: Start HTTP Scrape",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.body.book_page_url || $json.book_page_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+            { "name": "Accept", "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+            { "name": "Referer", "value": "https://www.google.com/" }
+          ]
+        },
+        "options": { "timeout": 30000, "redirect": { "redirect": { "followRedirects": true, "maxRedirects": 5 } } }
+      },
+      "id": "http-fetch-book",
+      "name": "HTTP: Fetch Book Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.all();\nconst htmlText = typeof input[0].json.data === 'string' ? input[0].json.data : JSON.stringify(input[0].json);\n\nconst wh = $('Webhook: Start HTTP Scrape').first().json;\nconst platform = ((wh.body && wh.body.platform) || wh.platform || 'unknown').toLowerCase();\nconst bookUrl = (wh.body && wh.body.book_page_url) || wh.book_page_url || '';\nconst startChapter = parseInt((wh.body && wh.body.start_chapter) || wh.start_chapter || 1);\nconst endChapter = (wh.body && wh.body.end_chapter) || wh.end_chapter || null;\nconst batchSize = parseInt((wh.body && wh.body.batch_size) || wh.batch_size || 100);\n\nfunction firstMatch(html, patterns) {\n  for (const re of patterns) {\n    const m = html.match(re);\n    if (m && m[1]) return m[1].replace(/<[^>]+>/g, '').trim();\n  }\n  return '';\n}\n\nfunction decodeHTML(str) {\n  return (str || '')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\").replace(/&nbsp;/g, ' ')\n    .replace(/&#(\\d+);/g, (m, n) => String.fromCharCode(parseInt(n)));\n}\n\nfunction extractLinks(html, pattern) {\n  const results = [];\n  const re = new RegExp(pattern.source || pattern, 'gi');\n  let m;\n  while ((m = re.exec(html)) !== null) {\n    results.push({ href: m[1], text: (m[2] || '').replace(/<[^>]+>/g, '').trim() });\n  }\n  return results;\n}\n\nlet meta = { book_name: '', author: '', description: '', cover_url: '', chapter_count: 0, _needs_ajax: false, _ajax_chapter_list: null };\nlet chapterLinks = [];\nlet baseUrl = '';\n\nif (platform === 'webnovel') {\n  baseUrl = 'https://www.webnovel.com';\n  const bookIdM = bookUrl.match(/\\/book\\/(\\d+)/);\n  const bookId = bookIdM ? bookIdM[1] : null;\n\n  // Try SSR data embedded in page\n  const ssrM = htmlText.match(/window\\.__SSR_DATA__\\s*=\\s*(\\{[\\s\\S]+?\\});\\s*<\\/script>/);\n  if (ssrM) {\n    try {\n      const ssrData = JSON.parse(ssrM[1]);\n      const bookInfo = ssrData.book || ssrData.bookInfo || {};\n      meta.book_name = bookInfo.bookName || bookInfo.title || '';\n      const authors = bookInfo.authorItems || [];\n      meta.author = authors.length > 0 ? authors.map(a => a.name).join(', ') : (bookInfo.authorName || '');\n      const items = bookInfo.chapterItems || ssrData.chapterItems || [];\n      if (bookId) {\n        chapterLinks = items.map(ch => ({\n          href: baseUrl + '/book/' + bookId + '/chapter/' + ch.id,\n          text: ch.name || ch.chapterName || '',\n        }));\n      }\n    } catch(e) {}\n  }\n\n  // Fallback: chapterItems JSON in page\n  if (chapterLinks.length === 0) {\n    const jsonM = htmlText.match(/\"chapterItems\"\\s*:\\s*(\\[[\\s\\S]*?\\])\\s*[,}]/);\n    if (jsonM && bookId) {\n      try {\n        const items = JSON.parse(jsonM[1]);\n        chapterLinks = items.map(ch => ({\n          href: baseUrl + '/book/' + bookId + '/chapter/' + ch.id,\n          text: ch.name || ch.chapterName || '',\n        }));\n      } catch(e) {}\n    }\n  }\n\n  // Fallback: fetch catalog page via ajax path\n  if (chapterLinks.length === 0 && bookId) {\n    meta._ajax_chapter_list = baseUrl + '/book/' + bookId + '/catalog';\n    meta._needs_ajax = true;\n  }\n\n  if (!meta.book_name) {\n    meta.book_name = decodeHTML(firstMatch(htmlText, [\n      /\"bookName\":\"([^\"]+)\"/i,\n      /<h1[^>]*>([^<]+)<\\/h1>/i,\n    ]));\n  }\n  if (!meta.author) {\n    meta.author = decodeHTML(firstMatch(htmlText, [\n      /\"authorName\":\"([^\"]+)\"/i,\n      /class=\"[^\"]*author[^\"]*\"[^>]*>[^<]*<a[^>]*>([^<]+)/i,\n    ]));\n  }\n}\n\nif (platform === 'novelbin') {\n  baseUrl = 'https://novelbin.com';\n  meta.book_name = decodeHTML(firstMatch(htmlText, [\n    /<h3[^>]*class=\"[^\"]*title[^\"]*\"[^>]*>([^<]+)/i,\n    /<h3[^>]*class=\"[^\"]*truyen-title[^\"]*\"[^>]*>([^<]+)/i,\n  ]));\n  meta.author = decodeHTML(firstMatch(htmlText, [\n    /class=\"[^\"]*author[^\"]*\"[^>]*>\\s*<[^>]+>([^<]+)/i,\n  ]));\n  chapterLinks = extractLinks(htmlText,\n    /href=\"(https?:\\/\\/novelbin\\.com\\/b\\/[^\"]+\\/chapter[^\"]+)\"[^>]*>([^<]*(?:Chapter|Chap|Ch)[^<]*)/i\n  );\n  if (chapterLinks.length === 0) {\n    const idMatch = bookUrl.match(/\\/b\\/([^/]+)/);\n    if (idMatch) {\n      meta._ajax_chapter_list = 'https://novelbin.com/ajax/chapter-archive?novelId=' + idMatch[1];\n      meta._needs_ajax = true;\n    }\n  }\n}\n\nif (platform === 'freewebnovel') {\n  baseUrl = 'https://freewebnovel.com';\n  meta.book_name = decodeHTML(firstMatch(htmlText, [\n    /<h1[^>]*class=\"[^\"]*tit[^\"]*\"[^>]*>([^<]+)/i,\n    /<h1[^>]*>([^<]+)<\\/h1>/i,\n  ]));\n  meta.author = decodeHTML(firstMatch(htmlText, [\n    /class=\"[^\"]*author[^\"]*\"[^>]*>[^<]*<a[^>]*>([^<]+)/i,\n  ]));\n  chapterLinks = extractLinks(htmlText,\n    /href=\"(\\/chapter\\/[^\"]+)\"[^>]*>([^<]*(?:Chapter|Chap)[^<]*)/i\n  ).map(l => ({ ...l, href: baseUrl + l.href }));\n}\n\nif (platform === 'royalroad') {\n  baseUrl = 'https://www.royalroad.com';\n  meta.book_name = decodeHTML(firstMatch(htmlText, [\n    /<h1[^>]*class=\"[^\"]*font-white[^\"]*\"[^>]*>([^<]+)/i,\n    /<h1[^>]*>([^<]+)<\\/h1>/i,\n  ]));\n  // Try JSON-LD structured data first\n  const ldM = htmlText.match(/<script[^>]*type=\"application\\/ld\\+json\"[^>]*>([\\s\\S]*?)<\\/script>/i);\n  if (ldM) {\n    try {\n      const ld = JSON.parse(ldM[1]);\n      if (ld.author && ld.author.name) meta.author = ld.author.name;\n      else if (Array.isArray(ld.author) && ld.author[0]) meta.author = ld.author[0].name || '';\n    } catch(e) {}\n  }\n  if (!meta.author) {\n    meta.author = decodeHTML(firstMatch(htmlText, [\n      /\"author\":\\{[^}]*\"name\":\"([^\"]+)\"/i,\n      /<span[^>]*property=\"name\"[^>]*>([^<]+)<\\/span>/i,\n      /class=\"[^\"]*author[^\"]*\"[^>]*>[^<]*<a[^>]*>([^<]+)/i,\n    ]));\n  }\n  const chRe = /href=\"(\\/fiction\\/\\d+\\/[^/\"]+\\/chapter\\/\\d+\\/[^\"]+)\"/gi;\n  const chSeen = new Set();\n  let chM;\n  while ((chM = chRe.exec(htmlText)) !== null) {\n    const href = baseUrl + chM[1];\n    if (!chSeen.has(href)) { chSeen.add(href); chapterLinks.push({ href, text: '' }); }\n  }\n}\n\nif (platform === 'wattpad') {\n  baseUrl = 'https://www.wattpad.com';\n  meta.book_name = decodeHTML(firstMatch(htmlText, [\n    /<h1[^>]*>([^<]+)<\\/h1>/i,\n    /class=\"[^\"]*story-title[^\"]*\"[^>]*>([^<]+)/i,\n  ]));\n  chapterLinks = extractLinks(htmlText,\n    /href=\"(\\/[^\"]*\\/[^\"]+)\"[^>]*class=\"[^\"]*part-title[^\"]*\"[^>]*>([^<]+)/i\n  ).map(l => ({ ...l, href: baseUrl + l.href }));\n}\n\nconst totalLinks = chapterLinks.length;\nconst sliced = chapterLinks.slice(Math.max(0, startChapter - 1), endChapter ? endChapter : chapterLinks.length);\nconst numberedChapters = sliced.map((ch, i) => ({\n  chapter_num: startChapter + i,\n  url: ch.href,\n  title_hint: ch.text || ('Chapter ' + (startChapter + i)),\n}));\n\nconst batches = [];\nfor (let i = 0; i < numberedChapters.length; i += batchSize) {\n  const batch = numberedChapters.slice(i, i + batchSize);\n  batches.push({\n    batch_index: Math.floor(i / batchSize) + 1,\n    chapter_start: batch[0].chapter_num,\n    chapter_end: batch[batch.length - 1].chapter_num,\n    chapters: batch,\n  });\n}\n\nreturn [{ json: {\n  status: 'ok',\n  platform,\n  book_url: bookUrl,\n  book_name: meta.book_name || 'Unknown Title',\n  author: meta.author || 'Unknown Author',\n  chapter_count: totalLinks,\n  scraped_range: startChapter + '\\u2013' + (endChapter || totalLinks),\n  total_chapters_to_scrape: numberedChapters.length,\n  batch_size: batchSize,\n  total_batches: batches.length,\n  batches,\n  _needs_ajax: meta._needs_ajax || false,\n  _ajax_chapter_list: meta._ajax_chapter_list || null,\n}}];\n"
+      },
+      "id": "code-parse-book",
+      "name": "Code: Parse Book Metadata + Chapter List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json._needs_ajax }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "if-needs-ajax",
+      "name": "IF: Needs Ajax Chapter List",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json._ajax_chapter_list }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "X-Requested-With", "value": "XMLHttpRequest" },
+            { "name": "Referer", "value": "={{ $json.book_url }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-ajax-chapters",
+      "name": "HTTP: Fetch Ajax Chapter List",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ajaxHtml = $input.first().json.data || JSON.stringify($input.first().json) || '';\nconst prev = $('Code: Parse Book Metadata + Chapter List').first().json;\n\nconst startChapter = prev.scraped_range ? parseInt(prev.scraped_range) : 1;\nconst batchSize = prev.batch_size || 100;\nconst platform = prev.platform || 'unknown';\nconst bookUrl = prev.book_url || '';\nconst bookIdM = bookUrl.match(/\\/book\\/(\\d+)/);\nconst bookId = bookIdM ? bookIdM[1] : '';\n\nconst links = [];\n\nif (platform === 'webnovel') {\n  // Try SSR data in catalog page\n  const ssrM = ajaxHtml.match(/window\\.__SSR_DATA__\\s*=\\s*(\\{[\\s\\S]+?\\});\\s*<\\/script>/);\n  if (ssrM) {\n    try {\n      const ssrData = JSON.parse(ssrM[1]);\n      const items = ssrData.chapterItems || (ssrData.book && ssrData.book.chapterItems) || [];\n      for (const ch of items) {\n        links.push({ href: 'https://www.webnovel.com/book/' + bookId + '/chapter/' + ch.id, text: ch.name || ch.chapterName || '' });\n      }\n    } catch(e) {}\n  }\n  // Fallback: JSON chapterItems in page\n  if (links.length === 0) {\n    const jsonM = ajaxHtml.match(/\"chapterItems\"\\s*:\\s*(\\[[\\s\\S]*?\\])\\s*[,}]/);\n    if (jsonM) {\n      try {\n        const items = JSON.parse(jsonM[1]);\n        for (const ch of items) {\n          links.push({ href: 'https://www.webnovel.com/book/' + bookId + '/chapter/' + ch.id, text: ch.name || '' });\n        }\n      } catch(e) {}\n    }\n  }\n  // Fallback: href regex\n  if (links.length === 0) {\n    const re = /href=\"(\\/book\\/\\d+\\/[^\"]+\\/chapter\\/\\d+[^\"]*)\"/gi;\n    const seen = new Set();\n    let m;\n    while ((m = re.exec(ajaxHtml)) !== null) {\n      if (!seen.has(m[1])) { seen.add(m[1]); links.push({ href: 'https://www.webnovel.com' + m[1], text: '' }); }\n    }\n  }\n} else if (platform === 'novelbin') {\n  const re = /href=\"(https?:\\/\\/novelbin\\.com\\/b\\/[^\"]+\\/chapter[^\"]+)\"[^>]*>([^<]*)/gi;\n  let m;\n  while ((m = re.exec(ajaxHtml)) !== null) {\n    links.push({ href: m[1], text: m[2].trim() });\n  }\n} else {\n  const re = /href=\"(https?:\\/\\/[^\"]+\\/chapter[^\"]+)\"[^>]*>([^<]*)/gi;\n  let m;\n  while ((m = re.exec(ajaxHtml)) !== null) {\n    links.push({ href: m[1], text: m[2].trim() });\n  }\n}\n\nconst sliced = links.slice(startChapter - 1);\nconst numbered = sliced.map((ch, i) => ({\n  chapter_num: startChapter + i,\n  url: ch.href,\n  title_hint: ch.text || ('Chapter ' + (startChapter + i)),\n}));\n\nconst batches = [];\nfor (let i = 0; i < numbered.length; i += batchSize) {\n  const batch = numbered.slice(i, i + batchSize);\n  batches.push({\n    batch_index: Math.floor(i / batchSize) + 1,\n    chapter_start: batch[0].chapter_num,\n    chapter_end: batch[batch.length - 1].chapter_num,\n    chapters: batch,\n  });\n}\n\nreturn [{ json: { ...prev, batches, total_batches: batches.length, chapter_count: links.length } }];\n"
+      },
+      "id": "code-parse-ajax",
+      "name": "Code: Parse Ajax Chapter List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst batches = data.batches || [];\n\nif (batches.length === 0) {\n  return [{ json: { status: 'error', error: 'No chapters found to scrape', ...data } }];\n}\n\nreturn batches.map(batch => ({ json: {\n  book_name: data.book_name,\n  author: data.author,\n  platform: data.platform,\n  book_url: data.book_url,\n  batch_index: batch.batch_index,\n  chapter_start: batch.chapter_start,\n  chapter_end: batch.chapter_end,\n  chapters: batch.chapters,\n  total_batches: data.total_batches,\n}}));\n"
+      },
+      "id": "code-split-batches",
+      "name": "Code: Split Into Batches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const batch = $input.first().json;\nif (!batch.chapters || batch.chapters.length === 0) {\n  return [{ json: { status: 'error', error: 'Batch has no chapters', ...batch } }];\n}\nreturn batch.chapters.map(ch => ({ json: {\n  book_name: batch.book_name,\n  author: batch.author,\n  platform: batch.platform,\n  book_url: batch.book_url,\n  batch_index: batch.batch_index,\n  chapter_start: batch.chapter_start,\n  chapter_end: batch.chapter_end,\n  total_batches: batch.total_batches,\n  chapter_num: ch.chapter_num,\n  chapter_url: ch.url,\n  title_hint: ch.title_hint,\n}}));\n"
+      },
+      "id": "code-split-chapters",
+      "name": "Code: Split Chapters in Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1750, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.chapter_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+            { "name": "Referer", "value": "={{ $json.book_url }}" }
+          ]
+        },
+        "options": { "timeout": 20000 }
+      },
+      "id": "http-fetch-chapter",
+      "name": "HTTP: Fetch Chapter Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Run once for ALL items — process every chapter HTTP response by index\nconst allItems = $input.all();\nconst allPrev = $('Code: Split Chapters in Batch').all();\n\nfunction stripHtml(str) {\n  return (str || '')\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"').replace(/&#39;/g, \"'\").replace(/&nbsp;/g, ' ')\n    .replace(/&#(\\d+);/g, (_, n) => String.fromCharCode(parseInt(n)))\n    .replace(/\\s+/g, ' ').trim();\n}\n\nfunction extractRRParagraphs(htmlStr) {\n  const divIdx = htmlStr.search(/class=\"[^\"]*chapter-content[^\"]*\"/i);\n  const startPos = divIdx >= 0 ? htmlStr.indexOf('>', divIdx) + 1 : 0;\n  const fromContent = htmlStr.slice(startPos);\n  const paragraphs = [];\n  const lc = fromContent.toLowerCase();\n  let pos = 0;\n  while (pos < lc.length) {\n    const pOpen = lc.indexOf('<p', pos);\n    if (pOpen < 0) break;\n    const tagEnd = lc.indexOf('>', pOpen);\n    if (tagEnd < 0) break;\n    const pClose = lc.indexOf('</p>', tagEnd);\n    const end = pClose >= 0 ? pClose : Math.min(tagEnd + 2000, lc.length);\n    const raw = htmlStr.slice(tagEnd + 1, end);\n    const text = stripHtml(raw).trim();\n    if (text.length > 10) paragraphs.push(text);\n    pos = pClose >= 0 ? pClose + 4 : tagEnd + 1;\n  }\n  return paragraphs;\n}\n\nfunction extractTagContent(html, openTag, closeTag) {\n  const results = [];\n  const lc = html.toLowerCase();\n  const ct = closeTag.toLowerCase();\n  let pos = 0;\n  while (pos < lc.length) {\n    const open = lc.indexOf(openTag, pos);\n    if (open < 0) break;\n    const tagEnd = lc.indexOf('>', open);\n    if (tagEnd < 0) break;\n    const close = lc.indexOf(ct, tagEnd);\n    const end = close >= 0 ? close : tagEnd + 1;\n    const raw = html.slice(tagEnd + 1, end);\n    const text = stripHtml(raw).trim();\n    if (text.length > 10) results.push(text);\n    pos = close >= 0 ? close + ct.length : tagEnd + 1;\n  }\n  return results;\n}\n\nconst results = [];\n\nfor (let i = 0; i < allItems.length; i++) {\n  const httpResponse = allItems[i].json;\n  const htmlStr = typeof httpResponse.data === 'string' ? httpResponse.data : JSON.stringify(httpResponse);\n  const prev = (allPrev[i] || allPrev[0]).json || {};\n\n  const platform = prev.platform || 'unknown';\n  const chapterNum = prev.chapter_num || (i + 1);\n  const titleHint = prev.title_hint || ('Chapter ' + chapterNum);\n\n  let title = titleHint;\n  let paragraphs = [];\n\n  if (platform === 'royalroad') {\n    const titleM = htmlStr.match(/<h1[^>]*>([^<]+)<\\/h1>/i);\n    if (titleM) title = stripHtml(titleM[1]);\n    paragraphs = extractRRParagraphs(htmlStr);\n  }\n\n  if (platform === 'webnovel') {\n    const ssrM = htmlStr.match(/window\\.__SSR_DATA__\\s*=\\s*(\\{[\\s\\S]+?\\});\\s*<\\/script>/);\n    if (ssrM) {\n      try {\n        const ssrData = JSON.parse(ssrM[1]);\n        const ch = ssrData.chapter || ssrData.chapterInfo || {};\n        title = ch.chapterName || ch.name || titleHint;\n        const content = ch.content || ch.chapterContent || '';\n        if (content) {\n          const cleaned = content.replace(/<[^>]+>/g, '\\n').replace(/&nbsp;/g, ' ');\n          paragraphs = cleaned.split(/\\n+/).map(p => p.trim()).filter(p => p.length > 10);\n        }\n      } catch(e) {}\n    }\n    if (paragraphs.length === 0) {\n      const contentM = htmlStr.match(/\"content\":\"((?:[^\"\\\\]|\\\\.)*)\"/)\n      if (contentM) {\n        const raw = contentM[1].replace(/\\\\n/g, '\\n').replace(/\\\\t/g, ' ').replace(/\\\\\"/g, '\"');\n        paragraphs = raw.split(/\\n+/).filter(p => p.trim().length > 10);\n      }\n    }\n    const titleM = htmlStr.match(/\"chapterName\":\"([^\"]+)\"/);\n    if (titleM && title === titleHint) title = titleM[1];\n  }\n\n  if (platform === 'novelbin') {\n    const titleM = htmlStr.match(/<span[^>]*class=\"[^\"]*chr-text[^\"]*\"[^>]*>([^<]+)/i) || htmlStr.match(/<h2[^>]*>([^<]+)<\\/h2>/i);\n    if (titleM) title = stripHtml(titleM[1]);\n    paragraphs = extractTagContent(htmlStr, '<div', '</div>').filter(p => p.length > 30);\n    if (paragraphs.length === 0) paragraphs = extractTagContent(htmlStr, '<p', '</p>').filter(p => p.length > 20);\n  }\n\n  if (platform === 'freewebnovel') {\n    const titleM = htmlStr.match(/<h1[^>]*>([^<]+)<\\/h1>/i);\n    if (titleM) title = stripHtml(titleM[1]);\n    paragraphs = extractTagContent(htmlStr, '<p', '</p>').filter(p => p.length > 20);\n  }\n\n  if (platform === 'wattpad') {\n    const titleM = htmlStr.match(/<h2[^>]*>([^<]+)<\\/h2>/i);\n    if (titleM) title = stripHtml(titleM[1]);\n    paragraphs = extractTagContent(htmlStr, '<p', '</p>').filter(p => p.length > 20);\n  }\n\n  if (paragraphs.length === 0) {\n    paragraphs = extractTagContent(htmlStr, '<p', '</p>').filter(p => p.length > 40);\n  }\n\n  const seen = new Set();\n  const cleaned = paragraphs.filter(p => {\n    const key = p.slice(0, 60);\n    if (seen.has(key)) return false;\n    seen.add(key);\n    return true;\n  });\n\n  const wordCount = cleaned.join(' ').split(/\\s+/).filter(w => w).length;\n\n  results.push({ json: {\n    book_name: prev.book_name,\n    author: prev.author,\n    platform: prev.platform,\n    batch_index: prev.batch_index,\n    chapter_start: prev.chapter_start,\n    chapter_end: prev.chapter_end,\n    total_batches: prev.total_batches,\n    chapter_num: chapterNum,\n    chapter_url: prev.chapter_url,\n    title,\n    paragraphs: cleaned,\n    word_count: wordCount,\n    is_empty: cleaned.length === 0,\n  }});\n}\n\nreturn results;\n"
+      },
+      "id": "code-extract-chapter",
+      "name": "Code: Extract Chapter Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "aggregate-chapters",
+      "name": "Aggregate: Collect Batch Chapters",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [2500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chapters = $input.first().json.data || [];\nif (!chapters.length) return [{ json: { status: 'error', error: 'No chapters aggregated' } }];\n\nconst first = chapters[0];\nconst bookName = first.book_name || 'Unknown Book';\nconst author = first.author || 'Unknown Author';\nconst batchIndex = first.batch_index || 1;\nconst chapterStart = first.chapter_start;\nconst chapterEnd = first.chapter_end;\n\nchapters.sort((a, b) => (a.chapter_num || 0) - (b.chapter_num || 0));\n\nconst lines = [];\nlines.push(bookName);\nlines.push('Author: ' + author);\nlines.push('Chapters ' + chapterStart + '\\u2013' + chapterEnd);\nlines.push('');\nlines.push('\\u2500'.repeat(60));\nlines.push('');\n\nconst chapterStats = [];\nconst emptyChapters = [];\nconst qcIssues = [];\nlet prevNum = chapterStart - 1;\n\nfor (const ch of chapters) {\n  const num = ch.chapter_num;\n  const title = ch.title || ch.title_hint || ('Chapter ' + num);\n  const paras = ch.paragraphs || [];\n  const wordCount = ch.word_count || 0;\n\n  if (num !== prevNum + 1 && prevNum > 0) {\n    qcIssues.push({ type: 'gap', from: prevNum, to: num, missing: num - prevNum - 1 });\n  }\n  prevNum = num;\n\n  if (paras.length === 0) {\n    emptyChapters.push(num);\n    qcIssues.push({ type: 'empty', chapter: num, title });\n  }\n\n  lines.push('Chapter ' + num + ': ' + title);\n  lines.push('');\n  if (paras.length > 0) lines.push(...paras);\n  else lines.push('[EMPTY CHAPTER — No content extracted]');\n  lines.push('');\n  lines.push('\\u2500'.repeat(40));\n  lines.push('');\n\n  chapterStats.push({ chapter: num, title, word_count: wordCount });\n}\n\nconst totalWords = chapterStats.reduce((s, c) => s + c.word_count, 0);\nlines.push('');\nlines.push('='.repeat(60));\nlines.push('WORD COUNT SUMMARY');\nlines.push('='.repeat(60));\nfor (const s of chapterStats) {\n  lines.push('Chapter ' + s.chapter + ': ' + s.title.slice(0, 40) + ' \\u2014 ' + s.word_count.toLocaleString() + ' words');\n}\nlines.push('');\nlines.push('Total: ' + totalWords.toLocaleString() + ' words across ' + chapterStats.length + ' chapter(s)');\nif (emptyChapters.length > 0) lines.push('Empty chapters: ' + emptyChapters.join(', '));\n\nconst docTitle = bookName + ' \\u2014 Ch' + chapterStart + '-' + chapterEnd;\nconst content = lines.join('\\n');\n\nreturn [{ json: {\n  status: 'ok',\n  doc_title: docTitle,\n  book_name: bookName,\n  author,\n  chapter_start: chapterStart,\n  chapter_end: chapterEnd,\n  batch_index: batchIndex,\n  total_batches: first.total_batches,\n  total_words: totalWords,\n  chapter_count: chapters.length,\n  empty_chapters: emptyChapters,\n  qc_issues: qcIssues,\n  qc_passed: qcIssues.length === 0,\n  content,\n  doc_filename: bookName + ' Ch' + chapterStart + '-' + chapterEnd + '.txt',\n}}];\n"
+      },
+      "id": "code-format-batch",
+      "name": "Code: Format Batch Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2750, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "PASTE_WORKFLOW_03_URL_HERE",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "http-send-to-wf03",
+      "name": "HTTP: Send to Google Drive (WF03)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3000, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Start HTTP Scrape": {
+      "main": [[ { "node": "HTTP: Fetch Book Page", "type": "main", "index": 0 } ]]
+    },
+    "HTTP: Fetch Book Page": {
+      "main": [[ { "node": "Code: Parse Book Metadata + Chapter List", "type": "main", "index": 0 } ]]
+    },
+    "Code: Parse Book Metadata + Chapter List": {
+      "main": [[ { "node": "IF: Needs Ajax Chapter List", "type": "main", "index": 0 } ]]
+    },
+    "IF: Needs Ajax Chapter List": {
+      "main": [
+        [ { "node": "HTTP: Fetch Ajax Chapter List", "type": "main", "index": 0 } ],
+        [ { "node": "Code: Split Into Batches", "type": "main", "index": 0 } ]
+      ]
+    },
+    "HTTP: Fetch Ajax Chapter List": {
+      "main": [[ { "node": "Code: Parse Ajax Chapter List", "type": "main", "index": 0 } ]]
+    },
+    "Code: Parse Ajax Chapter List": {
+      "main": [[ { "node": "Code: Split Into Batches", "type": "main", "index": 0 } ]]
+    },
+    "Code: Split Into Batches": {
+      "main": [[ { "node": "Code: Split Chapters in Batch", "type": "main", "index": 0 } ]]
+    },
+    "Code: Split Chapters in Batch": {
+      "main": [[ { "node": "HTTP: Fetch Chapter Page", "type": "main", "index": 0 } ]]
+    },
+    "HTTP: Fetch Chapter Page": {
+      "main": [[ { "node": "Code: Extract Chapter Content", "type": "main", "index": 0 } ]]
+    },
+    "Code: Extract Chapter Content": {
+      "main": [[ { "node": "Aggregate: Collect Batch Chapters", "type": "main", "index": 0 } ]]
+    },
+    "Aggregate: Collect Batch Chapters": {
+      "main": [[ { "node": "Code: Format Batch Content", "type": "main", "index": 0 } ]]
+    },
+    "Code: Format Batch Content": {
+      "main": [[ { "node": "HTTP: Send to Google Drive (WF03)", "type": "main", "index": 0 } ]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Credentials — never commit these
+credentials.json
+gdrive_token.json
+token.json
+*.pem
+*.p12
+service_account*.json
+
+# Output files
+*.docx
+Novels/
+output/
+ouput/
+
+# Logs
+*.log
+royalroad_scraper.log
+
+# macOS
+.DS_Store
+
+# Secrets / env
+.env
+.env.*
+config.local.*

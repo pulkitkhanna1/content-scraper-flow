@@ -1,0 +1,160 @@
+{
+  "name": "Novel Scraper — 02 Translation Finder (ZH/KR Sources)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "find-translation",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-xlate",
+      "name": "Webhook: Find Translation",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [0, 300],
+      "notes": "POST body: { url, platform, source_language, book_name (optional), start_chapter, end_chapter }"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── SEARCH QUERY BUILDER ─────────────────────────────────────────\n// Builds search queries from the input data.\n// If book_name is already known, use it; otherwise we need to fetch metadata first.\n\nconst body = $input.first().json.body || $input.first().json;\n\nconst url = body.url || '';\nconst platform = body.platform || 'unknown';\nconst lang = body.source_language || 'zh';\nconst bookName = body.book_name || '';\nconst startChapter = parseInt(body.start_chapter || 1);\nconst endChapter = body.end_chapter ? parseInt(body.end_chapter) : null;\n\n// Build NovelUpdates search URL\nconst searchTerm = encodeURIComponent(bookName || url);\nconst nuSearchUrl = `https://www.novelupdates.com/?s=${searchTerm}&post_type=seriesplans`;\n\n// Also build searches on the major aggregator sites\nconst fwnSearchUrl = `https://freewebnovel.com/search/?searchkey=${searchTerm}`;\nconst novelBinSearchUrl = `https://novelbin.com/?search=${searchTerm}`;\n\nreturn [{ json: {\n  original_url: url,\n  platform,\n  source_language: lang,\n  book_name: bookName,\n  start_chapter: startChapter,\n  end_chapter: endChapter,\n  nu_search_url: nuSearchUrl,\n  fwn_search_url: fwnSearchUrl,\n  novelbin_search_url: novelBinSearchUrl,\n  search_term: bookName,\n}}];\n"
+      },
+      "id": "code-build-search",
+      "name": "Code: Build Search Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.nu_search_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36" },
+            { "name": "Accept-Language", "value": "en-US,en;q=0.9" },
+            { "name": "Referer", "value": "https://www.google.com/" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "http-nu-search",
+      "name": "HTTP: Search NovelUpdates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Code: Build Search Queries').first().json.fwn_search_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "http-fwn-search",
+      "name": "HTTP: Search FreeWebNovel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 350]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Code: Build Search Queries').first().json.novelbin_search_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      },
+      "id": "http-novelbin-search",
+      "name": "HTTP: Search NovelBin",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [500, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─── TRANSLATION RESULT PARSER ───────────────────────────────────\n// Parses search results from all three sources.\n// Ranks candidates by match quality.\n\nconst searchData = $('Code: Build Search Queries').first().json;\nconst bookName = (searchData.book_name || '').toLowerCase();\n\nfunction stripHtml(str) {\n  return (str || '')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction similarity(a, b) {\n  a = a.toLowerCase().replace(/[^a-z0-9\\s]/g, '');\n  b = b.toLowerCase().replace(/[^a-z0-9\\s]/g, '');\n  const aWords = new Set(a.split(/\\s+/));\n  const bWords = new Set(b.split(/\\s+/));\n  const intersection = [...aWords].filter(w => bWords.has(w)).length;\n  return intersection / Math.max(aWords.size, bWords.size);\n}\n\nconst candidates = [];\n\n// ── Parse NovelUpdates ──\ntry {\n  const nuHtml = $('HTTP: Search NovelUpdates').first().json.data || '';\n  // NU result format: <div class=\"search_main_box_nu\"> ... <a class=\"w-blog-entry-title-h\" href=\"...\">Title</a>\n  const re = /href=\"(https:\\/\\/www\\.novelupdates\\.com\\/series\\/[^\"]+)\"[^>]*>([^<]+)/gi;\n  let m;\n  while ((m = re.exec(nuHtml)) !== null) {\n    const title = stripHtml(m[2]);\n    const score = bookName ? similarity(title, bookName) : 0.5;\n    candidates.push({\n      source: 'novelupdates',\n      title,\n      url: m[1],\n      score,\n      note: 'NovelUpdates index — follow for translator site links',\n    });\n  }\n} catch (e) {}\n\n// ── Parse FreeWebNovel ──\ntry {\n  const fwnHtml = $('HTTP: Search FreeWebNovel').first().json.data || '';\n  const re = /href=\"(\\/novel\\/[^\"]+)\"[^>]*class=\"[^\"]*book-name[^\"]*\"[^>]*>([^<]+)/gi;\n  let m;\n  while ((m = re.exec(fwnHtml)) !== null) {\n    const title = stripHtml(m[2]);\n    const score = bookName ? similarity(title, bookName) : 0.4;\n    candidates.push({\n      source: 'freewebnovel',\n      title,\n      url: `https://freewebnovel.com${m[1]}`,\n      score,\n    });\n  }\n  // Fallback pattern\n  if (!candidates.some(c => c.source === 'freewebnovel')) {\n    const re2 = /href=\"(\\/novel\\/[^\"]+)\"[^>]*>([^<]+)<\\/a>/gi;\n    while ((m = re2.exec(fwnHtml)) !== null) {\n      const title = stripHtml(m[2]);\n      if (title.length < 5) continue;\n      const score = bookName ? similarity(title, bookName) : 0.3;\n      candidates.push({ source: 'freewebnovel', title, url: `https://freewebnovel.com${m[1]}`, score });\n    }\n  }\n} catch (e) {}\n\n// ── Parse NovelBin ──\ntry {\n  const nbHtml = $('HTTP: Search NovelBin').first().json.data || '';\n  const re = /href=\"(https?:\\/\\/novelbin\\.com\\/b\\/[^\"]+)\"[^>]*>([^<]+)/gi;\n  let m;\n  while ((m = re.exec(nbHtml)) !== null) {\n    const title = stripHtml(m[2]);\n    if (title.length < 3) continue;\n    const score = bookName ? similarity(title, bookName) : 0.3;\n    candidates.push({ source: 'novelbin', title, url: m[1], score });\n  }\n} catch (e) {}\n\n// Sort by score desc, take top 5\ncandidates.sort((a, b) => b.score - a.score);\nconst top = candidates.slice(0, 5);\n\nconst found = top.length > 0 && top[0].score > 0.2;\n\nreturn [{ json: {\n  status: 'ok',\n  original_url: searchData.original_url,\n  original_platform: searchData.platform,\n  source_language: searchData.source_language,\n  book_name_searched: searchData.book_name,\n  start_chapter: searchData.start_chapter,\n  end_chapter: searchData.end_chapter,\n  translation_found: found,\n  top_candidate: found ? top[0] : null,\n  all_candidates: top,\n  recommended_action: found ? 'scrape_translation' : 'no_translation_found',\n  recommended_url: found ? top[0].url : null,\n  recommended_platform: found ? top[0].source : null,\n}}];\n"
+      },
+      "id": "code-parse-results",
+      "name": "Code: Parse + Rank Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [750, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            { "leftValue": "={{ $json.translation_found }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ]
+        }
+      },
+      "id": "if-translation-found",
+      "name": "IF: Translation Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1000, 350]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond-found",
+      "name": "Respond: Found (pass to HTTP scraper)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 250],
+      "notes": "Next: pass recommended_url to the HTTP Scraper workflow"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'no_translation', message: 'No English translation found. Manual review required or use translation API.', original_url: $json.original_url, book_name_searched: $json.book_name_searched, candidates: $json.all_candidates }) }}"
+      },
+      "id": "respond-not-found",
+      "name": "Respond: Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 450]
+    }
+  ],
+  "connections": {
+    "Webhook: Find Translation": {
+      "main": [[ { "node": "Code: Build Search Queries", "type": "main", "index": 0 } ]]
+    },
+    "Code: Build Search Queries": {
+      "main": [
+        [ { "node": "HTTP: Search NovelUpdates", "type": "main", "index": 0 } ],
+        [ { "node": "HTTP: Search FreeWebNovel", "type": "main", "index": 0 } ],
+        [ { "node": "HTTP: Search NovelBin", "type": "main", "index": 0 } ]
+      ]
+    },
+    "HTTP: Search NovelUpdates": {
+      "main": [[ { "node": "Code: Parse + Rank Results", "type": "main", "index": 0 } ]]
+    },
+    "HTTP: Search FreeWebNovel": {
+      "main": [[ { "node": "Code: Parse + Rank Results", "type": "main", "index": 0 } ]]
+    },
+    "HTTP: Search NovelBin": {
+      "main": [[ { "node": "Code: Parse + Rank Results", "type": "main", "index": 0 } ]]
+    },
+    "Code: Parse + Rank Results": {
+      "main": [[ { "node": "IF: Translation Found?", "type": "main", "index": 0 } ]]
+    },
+    "IF: Translation Found?": {
+      "main": [
+        [ { "node": "Respond: Found (pass to HTTP scraper)", "type": "main", "index": 0 } ],
+        [ { "node": "Respond: Not Found", "type": "main", "index": 0 } ]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}

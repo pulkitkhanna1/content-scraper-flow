@@ -1,0 +1,286 @@
+═══════════════════════════════════════════════════════════════
+NOVEL SCRAPER — N8N SETUP GUIDE (No Local Server Required)
+═══════════════════════════════════════════════════════════════
+
+WHAT THIS DOES
+──────────────
+You input any show URL (webnovel, novelbin, 69shuba, qidian, etc.)
+N8N automatically:
+  1. Detects the platform + language
+  2. If Chinese/Korean: searches for existing English translation
+  3. Scrapes chapters in batches of 100
+  4. QC checks (gaps, empty chapters, continuity)
+  5. Saves formatted files to Google Drive
+
+ARCHITECTURE
+────────────
+Workflow 00: Platform Router     → entry point, routes all URLs
+Workflow 01: HTTP Scraper        → novelbin, freewebnovel, royalroad, wattpad
+Workflow 02: Translation Finder  → ZH/KR sources → finds EN translation
+Workflow 03: Google Drive Output → saves + organizes + QC report
+
+For Chrome-needed sites (webnovel, wuxiaworld, 69shuba direct):
+→ Use Apify cloud scraping (Step 6 below)
+
+
+═══════════════════════════════════════════════════════════════
+STEP 1: SET UP N8N
+═══════════════════════════════════════════════════════════════
+
+Option A — N8N Cloud (easiest, no server):
+  1. Go to app.n8n.cloud
+  2. Sign up for free (free tier: 5 workflows, 2500 executions/month)
+  3. Or upgrade to Starter ($20/mo) for unlimited workflows
+
+Option B — Self-hosted on Railway (free, more powerful):
+  1. Go to railway.app → New Project → Deploy from Template
+  2. Search "n8n" → deploy the n8n template
+  3. Set environment variables:
+     N8N_ENCRYPTION_KEY = (any random 32-char string)
+     WEBHOOK_URL = https://your-railway-url.railway.app
+  4. Your N8N URL: https://your-app.railway.app
+
+IMPORTANT: Note your N8N instance URL — you'll need it for webhooks.
+
+
+═══════════════════════════════════════════════════════════════
+STEP 2: IMPORT THE WORKFLOWS
+═══════════════════════════════════════════════════════════════
+
+For each of the 4 JSON files in this folder:
+
+  1. Open N8N → click "+" (New Workflow) → "..." menu → Import
+  2. Paste the contents of the JSON file
+  3. Save the workflow
+
+Import order:
+  1. 00_platform_router.json      (main entry)
+  2. 01_http_scraper.json         (HTTP scraping)
+  3. 02_translation_finder.json   (ZH/KR translation search)
+  4. 03_google_drive_output.json  (save to Drive)
+
+
+═══════════════════════════════════════════════════════════════
+STEP 3: SET UP GOOGLE DRIVE CREDENTIAL
+═══════════════════════════════════════════════════════════════
+
+  1. In N8N → Settings → Credentials → Add Credential
+  2. Search "Google Drive OAuth2"
+  3. Click "Sign in with Google" → authorize your account
+  4. Name it "Google Drive" (this name is used in the workflows)
+
+  In Workflow 03 (Google Drive Output):
+  - Click each Google Drive node
+  - Under "Credentials" → select your "Google Drive" credential
+  - Replace "REPLACE_WITH_YOUR_CREDENTIAL_ID" with your actual ID
+
+
+═══════════════════════════════════════════════════════════════
+STEP 4: CONNECT THE WORKFLOWS TOGETHER
+═══════════════════════════════════════════════════════════════
+
+After importing, you need to wire the webhooks together.
+
+Get webhook URLs:
+  - Open each workflow → click the Webhook node → copy "Test URL"
+  - For production use "Production URL" (activate workflow first)
+
+In Workflow 00 (Platform Router):
+  - The Switch node has 4 outputs:
+    • output 0 (error)      → already connected to error response
+    • output 1 (find_translation) → add HTTP Request node:
+        Method: POST
+        URL: [Workflow 02 webhook URL]
+        Body: {{ $json }}
+    • output 2 (http_scrape) → add HTTP Request node:
+        Method: POST
+        URL: [Workflow 01 webhook URL]
+        Body: {{ $json }}
+    • output 3 (apify_scrape) → see Step 6
+
+In Workflow 01 (HTTP Scraper):
+  - After "Code: Format Batch Content" → add HTTP Request node:
+      Method: POST
+      URL: [Workflow 03 webhook URL]
+      Body: {{ $json }}
+
+In Workflow 02 (Translation Finder):
+  - After "Respond: Found" → add HTTP Request node:
+      Method: POST
+      URL: [Workflow 01 webhook URL]
+      Body:
+        {
+          "platform": "{{ $json.recommended_platform }}",
+          "book_page_url": "{{ $json.recommended_url }}",
+          "start_chapter": "{{ $json.start_chapter }}",
+          "end_chapter": "{{ $json.end_chapter }}",
+          "batch_size": 100
+        }
+
+
+═══════════════════════════════════════════════════════════════
+STEP 5: TEST THE WORKFLOW
+═══════════════════════════════════════════════════════════════
+
+Test with novelbin (simplest, no auth needed):
+
+  Using N8N's built-in test:
+  1. Open Workflow 00 → click Webhook node → "Listen for test event"
+  2. Send this POST request (use Postman, curl, or N8N's HTTP node):
+
+  curl -X POST "https://YOUR-N8N-URL/webhook-test/scrape" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "url": "https://novelbin.com/b/abandoned-luna-now-untouchable",
+      "start_chapter": 1,
+      "end_chapter": 10
+    }'
+
+  Expected flow:
+    Webhook → Platform Detector → Switch → HTTP Scrape → ...
+
+  Expected output in Drive:
+    /Novel Library/Abandoned Luna Now Untouchable/
+      Abandoned Luna Now Untouchable Ch001-10.txt
+
+Test with Chinese source (translation search):
+
+  curl -X POST "https://YOUR-N8N-URL/webhook-test/scrape" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "url": "https://www.69shuba.com/book/84861/",
+      "book_name": "The head chef in the kitchen has won another",
+      "start_chapter": 1,
+      "end_chapter": 50
+    }'
+
+  Expected flow:
+    Webhook → Platform Detector → Switch → Translation Finder →
+    (finds novelbin/freewebnovel URL) → HTTP Scrape → Drive
+
+
+═══════════════════════════════════════════════════════════════
+STEP 6: CHROME-BASED SITES (webnovel, wuxiaworld, 69shuba direct)
+═══════════════════════════════════════════════════════════════
+
+These sites need a real browser. Use Apify cloud scraping:
+
+  A. Set up Apify (free tier = $5/mo credit):
+     1. Sign up at apify.com
+     2. Get API key: Settings → API & Integrations → API tokens
+     3. In N8N → Credentials → Add → "Apify API"
+        Enter your API token
+
+  B. For webnovel.com specifically:
+     Create a custom Apify actor OR use their API:
+
+     webnovel has a public book info API (no browser needed):
+     GET https://www.webnovel.com/go/pcm/bookInfo/getBookWeb?bookId={BOOK_ID}
+
+     For chapter content (paid chapters need auth):
+     → Use the existing Python script on a cloud runner (see Option C)
+
+  C. Alternative: Deploy Python scraper to Railway
+     For the Chrome-based scrapers (webnovel_content_uc.py etc.):
+     1. Create a new Railway project
+     2. Upload the py Scripts folder
+     3. Create a simple Flask wrapper (n8n_api.py already does this)
+     4. Railway gives you a public URL
+     5. N8N calls that URL via HTTP Request node
+
+     This keeps it "no local server" while handling Chrome-based sites.
+
+  D. For now (quick workaround):
+     Chinese/Korean sources → Translation Finder finds EN translation
+     EN translations on novelbin/freewebnovel → HTTP Scraper handles them
+     This covers 80% of cases without needing Chrome at all.
+
+
+═══════════════════════════════════════════════════════════════
+STEP 7: METADATA FETCH (when book_name is unknown)
+═══════════════════════════════════════════════════════════════
+
+If you pass just a URL without a book_name for Chinese sources:
+  - Add an HTTP Request node before Translation Finder
+  - GET the book page URL
+  - Add a Code node to extract the title from the HTML
+
+For qidian.com:
+  GET https://www.qidian.com/book/{BOOK_ID}/
+  Extract: h1.book-title → book name (will be in Chinese)
+  Then search: use Chinese title on novelupdates.com
+  novelupdates.com will have the English title in its results
+
+
+═══════════════════════════════════════════════════════════════
+STEP 8: QC WORKFLOW
+═══════════════════════════════════════════════════════════════
+
+QC is built into the Format Batch node (Workflow 01).
+Each batch file saved to Drive includes a QC REPORT section.
+
+For a full QC scan of an entire book already saved:
+  - Add a new workflow triggered manually
+  - Google Drive: List files in /Novel Library/{Book Name}/
+  - Loop: for each .txt file → read content → check:
+    • Does it have content? (word_count > 0)
+    • Do chapter numbers run sequentially?
+    • Are there [EMPTY CHAPTER] markers?
+  - Build a report and send via email/Slack
+
+
+═══════════════════════════════════════════════════════════════
+WORKFLOW DATA FLOW SUMMARY
+═══════════════════════════════════════════════════════════════
+
+INPUT (webhook):
+  { url, start_chapter, end_chapter }
+
+→ Workflow 00 (Router):
+  Detects platform, language, scraper type
+
+→ If ZH/KR → Workflow 02 (Translation Finder):
+  Searches novelupdates, freewebnovel, novelbin
+  Returns recommended EN translation URL
+
+→ Workflow 01 (HTTP Scraper):
+  Input: { platform, book_page_url, start_chapter, end_chapter }
+  1. Fetch book page → parse metadata + chapter list
+  2. Split into 100-chapter batches
+  3. For each chapter in batch:
+     - HTTP GET chapter page
+     - Extract title + paragraphs
+  4. Format batch with word counts + QC
+
+→ Workflow 03 (Drive Output):
+  Input: formatted batch
+  1. Create book folder if not exists
+  2. Upload .txt file to /Novel Library/{Book Name}/
+  3. Return drive link + QC report
+
+
+═══════════════════════════════════════════════════════════════
+COMMON ISSUES + FIXES
+═══════════════════════════════════════════════════════════════
+
+Problem: "Chapter content empty" for some chapters
+Fix: The site may use JavaScript to load content.
+     Add a 2-3 second delay in the loop (N8N Wait node).
+     Or add a Retry on Fail option to the HTTP Request node.
+
+Problem: Getting 403/429 errors (rate limited)
+Fix: Add a "Wait" node (2-3 seconds) between chapter requests.
+     In HTTP Request node → Retry on Fail → Max Tries: 3, Wait: 2000ms
+
+Problem: Chapter list not found (0 chapters detected)
+Fix: The site may load chapters via JavaScript/AJAX.
+     Check if there's an API endpoint (look for XHR in browser DevTools).
+     For novelbin: the Ajax URL is built automatically in the workflow.
+
+Problem: Translation search finds wrong book
+Fix: Pass "book_name" explicitly in the webhook body.
+     Use the exact English title if known.
+
+Problem: Google Drive upload fails
+Fix: Re-authenticate the Google Drive credential.
+     Check that the N8N app has Drive API access in Google Console.

@@ -1,0 +1,250 @@
+═══════════════════════════════════════════
+NOVEL SCRAPER SETUP CHECKLIST
+(Super Simple Version)
+═══════════════════════════════════════════
+
+Think of it like this:
+  You paste a book link → magic happens →
+  chapters appear in your Google Drive folder.
+
+Here's how to set up that magic, one step at a time.
+
+
+──────────────────────────────────────────
+PART 1: GET YOUR TOOLS READY
+(Do this once, never again)
+──────────────────────────────────────────
+
+□ 1. Create a free N8N account
+      Go to: https://app.n8n.cloud
+      Click "Sign up"
+      Use your email and make a password
+      ✅ Done when: you can see a blank N8N dashboard
+
+□ 2. Connect Google Drive to N8N
+      Inside N8N → click "Credentials" (left sidebar)
+      Click "+ Add credential"
+      Type "Google Drive" in the search box
+      Click it → click "Sign in with Google"
+      Pick your Google account → click Allow
+      ✅ Done when: you see "Google Drive" saved in your credentials list
+
+□ 3. Download the 4 workflow files to your computer
+      They are in this folder you're reading from:
+        • 00_platform_router.json
+        • 01_http_scraper.json
+        • 02_translation_finder.json
+        • 03_google_drive_output.json
+      ✅ Done when: you can see all 4 files on your computer
+
+
+──────────────────────────────────────────
+PART 2: PUT THE WORKFLOWS INTO N8N
+(Do this once)
+──────────────────────────────────────────
+
+Do this 4 times — once for each file.
+Start with 00, then 01, then 02, then 03.
+
+□ 4. Import Workflow 00 (the front door)
+      In N8N → click "+ New workflow" (top right)
+      Click the "..." button (top right of the blank canvas)
+      Click "Import from file"
+      Pick the file: 00_platform_router.json
+      Click "Save" (top right)
+      ✅ Done when: you see a workflow with coloured boxes (nodes)
+
+□ 5. Import Workflow 01 (the scraper)
+      Same steps as above
+      File: 01_http_scraper.json
+      Save it
+      ✅ Done when: saved
+
+□ 6. Import Workflow 02 (the translator finder)
+      Same steps as above
+      File: 02_translation_finder.json
+      Save it
+      ✅ Done when: saved
+
+□ 7. Import Workflow 03 (the Google Drive saver)
+      Same steps as above
+      File: 03_google_drive_output.json
+      Save it
+
+      EXTRA STEP for this one:
+      Click any orange "Google Drive" box in this workflow
+      Under "Credentials" → pick the "Google Drive" you set up in Step 2
+      Do this for every Google Drive box (there are 3 of them)
+      Save it
+      ✅ Done when: all Google Drive boxes show your credential name
+
+
+──────────────────────────────────────────
+PART 3: LINK THE WORKFLOWS TOGETHER
+(They need to talk to each other)
+──────────────────────────────────────────
+
+Each workflow has a "front door" with a web address (URL).
+You need to copy those addresses and give them to the other workflows.
+
+□ 8. Get the address for Workflow 01
+      Open Workflow 01
+      Click the first box (called "Webhook: Start HTTP Scrape")
+      You'll see two URLs:
+        • Test URL (use this for now)
+        • Production URL (use this later when going live)
+      Copy the Test URL → paste it in a notepad for now
+      ✅ Done when: you have the URL copied somewhere
+
+□ 9. Get the address for Workflow 02
+      Open Workflow 02
+      Click the first box (called "Webhook: Find Translation")
+      Copy the Test URL → save it in your notepad
+      ✅ Done when: URL copied
+
+□ 10. Get the address for Workflow 03
+       Open Workflow 03
+       Click the first box (called "Webhook: Save Batch")
+       Copy the Test URL → save it in your notepad
+       ✅ Done when: URL copied
+
+□ 11. Connect Workflow 00 → Workflow 01 and 02
+       Open Workflow 00
+       Click the "Switch: Route by Platform Type" box
+       You'll see 4 output dots on the right side
+
+       From output dot #2 (http_scrape):
+         → drag a line → add "HTTP Request" node
+         Set Method: POST
+         Set URL: [paste Workflow 01 URL from Step 8]
+         Set Body: {{ $json }}
+
+       From output dot #1 (find_translation):
+         → drag a line → add "HTTP Request" node
+         Set Method: POST
+         Set URL: [paste Workflow 02 URL from Step 9]
+         Set Body: {{ $json }}
+
+       Save Workflow 00
+       ✅ Done when: two new boxes are connected to the Switch
+
+□ 12. Connect Workflow 01 → Workflow 03
+       Open Workflow 01
+       Find the last box "Code: Format Batch Content"
+       Drag a line from it → add "HTTP Request" node
+       Set Method: POST
+       Set URL: [paste Workflow 03 URL from Step 10]
+       Set Body: {{ $json }}
+       Save Workflow 01
+       ✅ Done when: saved
+
+□ 13. Connect Workflow 02 → Workflow 01
+       Open Workflow 02
+       Find the box "Respond: Found (pass to HTTP scraper)"
+       Drag a line from it → add "HTTP Request" node
+       Set Method: POST
+       Set URL: [paste Workflow 01 URL from Step 8]
+       Body (copy this exactly):
+         {
+           "platform": "{{ $json.recommended_platform }}",
+           "book_page_url": "{{ $json.recommended_url }}",
+           "start_chapter": "{{ $json.start_chapter }}",
+           "end_chapter": "{{ $json.end_chapter }}",
+           "batch_size": 100
+         }
+       Save Workflow 02
+       ✅ Done when: saved
+
+
+──────────────────────────────────────────
+PART 4: TURN THEM ON
+──────────────────────────────────────────
+
+□ 14. Activate all 4 workflows
+       Open each workflow (00, 01, 02, 03)
+       Toggle the switch at the top from grey → blue (Active)
+       Do this for all 4
+       ✅ Done when: all 4 show a blue "Active" toggle
+
+
+──────────────────────────────────────────
+PART 5: TEST IT!
+──────────────────────────────────────────
+
+□ 15. Send your first book link
+       Open Workflow 00
+       Click the Webhook box → click "Listen for test event"
+
+       Now open a new browser tab and go to:
+       https://reqbin.com   (free online tool to send requests)
+
+       Fill in:
+         URL: [paste the Workflow 00 Test URL]
+         Method: POST
+         Content-Type: application/json
+         Body:
+           {
+             "url": "https://novelbin.com/b/abandoned-luna-now-untouchable",
+             "start_chapter": 1,
+             "end_chapter": 10
+           }
+
+       Click Send
+       ✅ Done when: you see green checkmarks appearing in N8N
+                    and a file appears in your Google Drive under
+                    a folder called "Novel Library"
+
+□ 16. Check Google Drive
+       Open Google Drive
+       Look for a folder called "Novel Library"
+       Inside it, find a folder with the book name
+       Inside that, find a .txt file like:
+         "Abandoned Luna Now Untouchable Ch001-10.txt"
+       Open it — you should see chapter text!
+       ✅ Done when: you can read the chapter content
+
+
+──────────────────────────────────────────
+PART 6: USE IT FOR REAL
+──────────────────────────────────────────
+
+□ 17. Switch from Test URLs to Production URLs
+       Go back to Step 8–10
+       Copy the "Production URL" instead of Test URL
+       Update the HTTP Request nodes in Steps 11–13
+       ✅ Done when: all connections use Production URLs
+
+□ 18. Try a Chinese/Korean source
+       Send this instead:
+         {
+           "url": "https://www.69shuba.com/book/84861/",
+           "book_name": "The head chef in the kitchen",
+           "start_chapter": 1,
+           "end_chapter": 50
+         }
+       N8N will automatically find the English translation
+       and scrape that instead
+       ✅ Done when: chapters appear in Drive
+
+
+──────────────────────────────────────────
+YOU'RE DONE! HERE'S WHAT HAPPENS NOW:
+──────────────────────────────────────────
+
+Every time you want a new book:
+  1. Go to Workflow 00 → paste the book link
+  2. N8N does everything automatically
+  3. Find your chapters in Google Drive
+
+Files will be named like:
+  /Novel Library/
+    /Book Name/
+      Book Name Ch001-100.txt
+      Book Name Ch101-200.txt
+      Book Name Ch201-300.txt
+      ...
+
+Each file has:
+  • All chapters formatted cleanly
+  • Word count for every chapter
+  • QC report at the bottom (flags empty chapters or gaps)
