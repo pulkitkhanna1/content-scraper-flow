@@ -122,9 +122,32 @@ def _file_path(book_dir, safe_name, file_idx):
     return os.path.join(book_dir, f"{safe_name} {s}-{e}.docx")
 
 
+def _write_metadata_docx(book_dir, result, book_name, platform, start_ch, end_ch):
+    """Write a metadata.docx to the book folder with show info."""
+    from datetime import datetime
+    path = os.path.join(book_dir, "metadata.docx")
+    doc = Document()
+    doc.add_heading(book_name, level=1)
+    fields = [
+        ("Platform",        platform),
+        ("Source URL",      result.get("canonical_url") or result.get("url") or ""),
+        ("Author",          result.get("author") or ""),
+        ("Total Chapters",  str(result.get("chapter_count") or "")),
+        ("Scraped",         f"Ch {start_ch} – Ch {end_ch}"),
+        ("Date",            datetime.now().strftime("%Y-%m-%d %H:%M")),
+    ]
+    for label, value in fields:
+        if value:
+            p = doc.add_paragraph()
+            p.add_run(f"{label}: ").bold = True
+            p.add_run(value)
+    doc.save(path)
+    return path
+
+
 def scrape_novelbin(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
     safe = _safe_name(book_name)
-    book_dir = os.path.join(out_dir, safe)
+    book_dir = os.path.join(out_dir, "scraped_novels", safe)
     os.makedirs(book_dir, exist_ok=True)
     log(f"Output: {book_dir}")
 
@@ -220,7 +243,7 @@ def scrape_novelbin(start_url, book_name, start_ch, end_ch, out_dir, log, stop, 
 
 def scrape_royalroad(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
     safe = _safe_name(book_name)
-    book_dir = os.path.join(out_dir, safe)
+    book_dir = os.path.join(out_dir, "scraped_novels", safe)
     os.makedirs(book_dir, exist_ok=True)
     log(f"Output: {book_dir}")
 
@@ -387,10 +410,15 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
             upload_to_drive(path, GDRIVE_FOLDER_ID, log)
 
     try:
+        safe = _safe_name(book_name)
+        book_dir = os.path.join(out_dir, "scraped_novels", safe)
+        os.makedirs(book_dir, exist_ok=True)
+        _write_metadata_docx(book_dir, result, book_name, platform, start_ch, end_ch)
+
         log(f"{'='*50}")
         log(f"Scraping: {book_name}")
         log(f"Platform: {platform} | Chapters: {start_ch}–{end_ch}")
-        log(f"Output:   {out_dir}")
+        log(f"Output:   {book_dir}")
         log(f"{'='*50}")
 
         mode = PLATFORM_MODE.get(platform, "hardcoded")
