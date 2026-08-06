@@ -359,6 +359,96 @@ def scrape_royalroad(start_url, book_name, start_ch, end_ch, out_dir, log, stop,
         on_file_complete(out_path)
 
 
+def scrape_freewebnovel(book_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
+    safe = _safe_name(book_name)
+    book_dir = os.path.join(out_dir, "scraped_novels", safe)
+    os.makedirs(book_dir, exist_ok=True)
+    log(f"Output: {book_dir}")
+
+    m = re.search(r"/novel/([^/?#]+)", book_url)
+    slug = m.group(1) if m else None
+    if not slug:
+        log("ERROR: Could not extract slug from book URL")
+        return
+
+    ch_num = start_ch
+    file_idx = (ch_num - 1) // CHAPTERS_PER_FILE + 1
+    ch_in_file = (ch_num - 1) % CHAPTERS_PER_FILE
+    out_path = _file_path(book_dir, safe, file_idx)
+    doc = Document(out_path) if os.path.exists(out_path) else Document()
+
+    while ch_num <= end_ch:
+        if stop.is_set():
+            break
+
+        ch_url = f"https://freewebnovel.com/novel/{slug}/chapter-{ch_num}"
+        try:
+            resp = _requests.get(ch_url, headers=HEADERS, timeout=15)
+            if resp.status_code == 404:
+                log(f"  Chapter {ch_num}: 404 — no more chapters")
+                break
+            if resp.status_code != 200:
+                log(f"  Chapter {ch_num}: HTTP {resp.status_code}, skipping")
+                ch_num += 1
+                continue
+
+            html = resp.text
+
+            # Title from <title> tag: "BookName - Chapter N - ChapterTitle"
+            title_m = re.search(r"<title>([^<|]+)", html)
+            raw_title = title_m.group(1).strip() if title_m else ""
+            parts = raw_title.split(" - ", 1)
+            title = parts[1].strip() if len(parts) > 1 else f"Chapter {ch_num}"
+
+            # Content between chapter-start and chapter-end markers
+            body_m = re.search(r'class="chapter-start">(.*?)class="chapter-end"', html, re.S)
+            paragraphs = []
+            if body_m:
+                inner = re.sub(r"<script[^>]*>.*?</script>", "", body_m.group(1), flags=re.S)
+                for chunk in re.split(r"</?p[^>]*>", inner):
+                    text = re.sub(r"<[^>]+>", "", chunk).strip()
+                    if len(text) > 20:
+                        paragraphs.append(text)
+
+            if not paragraphs:
+                log(f"  Chapter {ch_num}: no content, skipping")
+                ch_num += 1
+                continue
+
+            doc.add_heading(title, level=1)
+            count = 0
+            for para in paragraphs:
+                doc.add_paragraph(para)
+                count += 1
+
+            doc.save(out_path)
+            log(f"  Saved: {title} ({count} paragraphs)")
+
+            ch_num += 1
+            ch_in_file += 1
+
+            if ch_num <= end_ch and ch_in_file >= CHAPTERS_PER_FILE:
+                completed = out_path
+                log("100 chapters done — starting new file...")
+                file_idx += 1
+                ch_in_file = 0
+                out_path = _file_path(book_dir, safe, file_idx)
+                doc = Document()
+                if on_file_complete:
+                    on_file_complete(completed)
+
+            time.sleep(1)
+
+        except Exception as exc:
+            log(f"  Chapter {ch_num}: error — {exc}")
+            ch_num += 1
+
+    doc.save(out_path)
+    if on_file_complete:
+        on_file_complete(out_path)
+    log(f"Done. Files saved in: {book_dir}")
+
+
 def run_subprocess(cmd, log, stop, cwd=None):
     log(f"Running: {' '.join(str(c) for c in cmd)}")
     try:
@@ -383,7 +473,7 @@ def run_subprocess(cmd, log, stop, cwd=None):
 PLATFORM_MODE = {
     "novelbin":     "inline",
     "royalroad":    "inline",
-    "freewebnovel": "argparse",
+    "freewebnovel": "inline",
     "webnovel":     "hardcoded",
     "69shuba":      "hardcoded",
     "babelnovel":   "hardcoded",
@@ -431,20 +521,9 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
             url = scraper_args.get("url") or result.get("canonical_url")
             scrape_royalroad(url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
 
-        elif mode == "argparse" and platform == "freewebnovel":
+        elif mode == "inline" and platform == "freewebnovel":
             book_url = scraper_args.get("book_url") or result.get("canonical_url")
-            script = SCRIPT_DIR / "freewebnovel" / "script_new.py"
-            if not script.exists():
-                log(f"Script not found: {script}")
-            else:
-                run_subprocess(
-                    [sys.executable, script,
-                     "--book-url", book_url,
-                     "--start-chapter", str(start_ch),
-                     "--end-chapter", str(end_ch),
-                     "--book-name", book_name],
-                    log, stop
-                )
+            scrape_freewebnovel(book_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
 
         else:
             # Browser-based: show config guide
