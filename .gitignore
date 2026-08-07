@@ -33,3 +33,5 @@ royalroad_scraper.log
 .env
 .env.*
 config.local.*
+py Scripts/webnovel_cookies.json
+py Scripts/webnovel_checkpoint*.json
