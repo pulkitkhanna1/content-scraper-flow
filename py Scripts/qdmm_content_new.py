@@ -390,7 +390,6 @@ def create_driver(headless=False):
 
     driver = uc.Chrome(
         options=options,
-        version_main=150,
         use_subprocess=True,
         headless=headless,
     )

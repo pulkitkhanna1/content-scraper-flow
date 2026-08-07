@@ -429,20 +429,16 @@ def create_driver(headless: bool = HEADLESS) -> uc.Chrome:
         opts.add_argument("--dns-prefetch-disable")
         return opts
 
-    chrome_major = _get_local_chrome_major()
     try:
         opts = get_opts()
-        if chrome_major:
-            driver = uc.Chrome(options=opts, use_subprocess=True, headless=headless, version_main=chrome_major)
-        else:
-            driver = uc.Chrome(options=opts, use_subprocess=True, headless=headless)
+        driver = uc.Chrome(options=opts, use_subprocess=True, headless=headless)
     except TypeError as e:
         if "Binary Location Must be a String" in str(e):
             logger.error("Google Chrome is not installed on this system! "
                          "If you are deploying on Render, you must add the Chrome Buildpack to your settings: "
                          "https://github.com/render-examples/chrome-buildpack.git")
             raise RuntimeError("Google Chrome not found. Please install Chrome or add the Render Chrome Buildpack.") from e
-        # older UC versions don't accept version_main or headless as kwarg
+        # older UC versions don't accept headless as kwarg
         logger.info("Retrying with fallback options...")
         opts = get_opts()
         driver = uc.Chrome(options=opts, use_subprocess=True)
