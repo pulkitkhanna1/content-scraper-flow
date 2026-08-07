@@ -580,19 +580,31 @@ def scrape_webnovel(book_id, book_name, start_ch, end_ch, out_dir, cookies_str, 
     os.makedirs(book_dir, exist_ok=True)
 
     cookies = _parse_cookie_str(cookies_str)
-    headers = {**HEADERS, "Referer": "https://www.webnovel.com/", "Accept": "application/json, */*"}
+    csrf = cookies.get("_csrfToken", "")
+    headers = {
+        **HEADERS,
+        "Referer": "https://www.webnovel.com/",
+        "Accept": "application/json, */*",
+        "X-CSRF-TOKEN": csrf,
+    }
 
     # 1. Get chapter list
     log("Fetching chapter list from webnovel API...")
+    log(f"  Cookies parsed: {len(cookies)} keys — {', '.join(list(cookies.keys())[:6])}")
     try:
         resp = _requests.get(
             f"https://www.webnovel.com/go/pcm/chapter/getChapterList?bookId={book_id}",
             headers=headers, cookies=cookies, timeout=20
         )
+        log(f"  API status: {resp.status_code}")
+        if not resp.text.strip():
+            log("  Empty response — cookies may be missing httpOnly session tokens.")
+            log("  Get cookies via: F12 → Application → Cookies → www.webnovel.com → copy Name=Value pairs")
+            return
         data = resp.json()
         all_chapters = data.get("data", {}).get("chapterItems", [])
         if not all_chapters:
-            log(f"  API returned no chapters (status {resp.status_code}). Check your cookies.")
+            log(f"  API returned no chapters. Response: {resp.text[:200]}")
             return
     except Exception as e:
         log(f"  Failed to fetch chapter list: {e}")
@@ -1883,7 +1895,7 @@ function setProgress(on) {
       <textarea id="login-cookies" rows="4" placeholder="Paste cookie string here..."
         style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:12px;outline:none;resize:vertical;font-family:monospace"></textarea>
       <div id="cookie-creds-hint" style="display:none;font-size:11px;color:var(--blue);margin-top:6px;padding:6px 8px;background:rgba(74,144,226,.08);border-radius:5px;font-family:monospace"></div>
-      <div style="font-size:11px;color:var(--muted);margin-top:4px">Open the site → DevTools Console → type <code style="background:var(--bg);padding:1px 4px;border-radius:3px">copy(document.cookie)</code> → paste above</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">F12 → <b>Application</b> → Cookies → <i>www.webnovel.com</i> → select all rows → copy Name=Value pairs and paste above</div>
     </div>
 
     <div style="display:flex;gap:10px;justify-content:flex-end">
