@@ -7,17 +7,16 @@ RUN apt-get update && apt-get install -y \
     unzip \
     curl \
     ca-certificates \
-    libxss1 \
-    libappindicator1 \
-    libgconf-2-4 \
-    libxi6 \
-    librandr2 \
-    libasound2 \
-    libpangocairo-1.0-0 \
+    libnss3 \
+    libnspr4 \
     libatk1.0-0 \
     libatk-bridge2.0-0 \
-    libgtk-3-0 \
-    libnss3 \
+    libcups2 \
+    libdrm2 \
+    libdbus-1-3 \
+    libxkbcommon0 \
+    libx11-xcb1 \
+    libxcb1 \
     libxcomposite1 \
     libxcursor1 \
     libxdamage1 \
@@ -25,7 +24,9 @@ RUN apt-get update && apt-get install -y \
     libxfixes3 \
     libxrandr2 \
     libgbm1 \
-    libcups2 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libgtk-3-0 \
     --no-install-recommends
 
 # Install Google Chrome stable
