@@ -1708,6 +1708,14 @@ function startScrape() {
     document.getElementById('login-fields').style.display = 'none';
     document.getElementById('cookie-field').style.display = 'block';
     document.getElementById('login-cookies').value = '';
+    const hint = document.getElementById('cookie-creds-hint');
+    if (hint) hint.style.display = 'none';
+    fetch('/api/platform-creds/' + platform).then(r => r.json()).then(c => {
+      if (hint && c.email) {
+        hint.textContent = 'Log in as: ' + c.email + ' / ' + c.password;
+        hint.style.display = 'block';
+      }
+    }).catch(() => {});
   } else if (LOGIN_PLATFORMS.includes(platform)) {
     // Show email/password modal
     document.getElementById('login-modal').style.display = 'flex';
@@ -1874,7 +1882,8 @@ function setProgress(on) {
       </label>
       <textarea id="login-cookies" rows="4" placeholder="Paste cookie string here..."
         style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:12px;outline:none;resize:vertical;font-family:monospace"></textarea>
-      <div style="font-size:11px;color:var(--muted);margin-top:4px">Open webnovel.com → DevTools Console → type <code style="background:var(--bg);padding:1px 4px;border-radius:3px">copy(document.cookie)</code> → paste above</div>
+      <div id="cookie-creds-hint" style="display:none;font-size:11px;color:var(--blue);margin-top:6px;padding:6px 8px;background:rgba(74,144,226,.08);border-radius:5px;font-family:monospace"></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Open the site → DevTools Console → type <code style="background:var(--bg);padding:1px 4px;border-radius:3px">copy(document.cookie)</code> → paste above</div>
     </div>
 
     <div style="display:flex;gap:10px;justify-content:flex-end">
