@@ -675,19 +675,29 @@ PLATFORM_MODE = {
     "novelbin":     "inline",
     "allnovel":     "inline",
     "royalroad":    "inline",
-    "freewebnovel": "hardcoded",
-    "webnovel":     "hardcoded",
+    "freewebnovel": "hardcoded",   # Cloudflare-blocked; keep as manual
+    "webnovel":     "subprocess",
     "wuxiaworld":   "inline",
-    "69shuba":      "hardcoded",
-    "babelnovel":   "hardcoded",
-    "tapas":        "hardcoded",
-    "wuxiaworld":   "hardcoded",
-    "wattpad":      "hardcoded",
-    "kakao":        "hardcoded",
-    "qidian":       "hardcoded",
-    "qdmm":         "hardcoded",
-    "hengyan":      "hardcoded",
+    "69shuba":      "subprocess",
+    "babelnovel":   "subprocess",
+    "tapas":        "subprocess",
+    "wattpad":      "subprocess",
+    "kakao":        "hardcoded",   # OCR + Korean auth; manual only
+    "qidian":       "hardcoded",   # 2captcha + ZH auth; manual only
+    "qdmm":         "hardcoded",   # 2captcha + ZH auth; manual only
+    "hengyan":      "subprocess",
 }
+
+
+def _upload_dir_docx(book_dir: str, log_fn, subfolder_name: str = ""):
+    """After a subprocess scraper finishes, upload all .docx files in book_dir to Drive."""
+    files = sorted(Path(book_dir).glob("*.docx"))
+    if not files:
+        log_fn("No .docx files found to upload.")
+        return
+    for f in files:
+        log_fn(f"Uploading to Google Drive: {f.name} ...")
+        upload_to_drive(str(f), GDRIVE_FOLDER_ID, log_fn, subfolder_name=subfolder_name)
 
 
 def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=False):
@@ -742,41 +752,96 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                 start_url = first_ch_url or result.get("canonical_url")
             scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
 
+        elif mode == "subprocess" and platform == "webnovel":
+            canonical = result.get("canonical_url", "")
+            cmd = [sys.executable, str(SCRIPT_DIR / "webnovel_content_uc.py"),
+                   canonical,
+                   "--out-dir", book_dir,
+                   "--start-chapter", str(start_ch),
+                   "--end-chapter", str(end_ch)]
+            rc = _run_script(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
+        elif mode == "subprocess" and platform == "tapas":
+            start_url = scraper_args.get("start_url") or result.get("canonical_url", "")
+            cmd = [sys.executable, str(SCRIPT_DIR / "tapas_content_fixed.py"),
+                   "--start-url", start_url,
+                   "--book-name", book_name,
+                   "--start-chapter", str(start_ch),
+                   "--max-chapters", str(end_ch - start_ch + 1),
+                   "--out", book_dir]
+            rc = _run_script(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
+        elif mode == "subprocess" and platform == "babelnovel":
+            canonical = result.get("canonical_url", "")
+            log("Note: Babelnovel requires manual login in the browser window that opens.")
+            cmd = [sys.executable, str(SCRIPT_DIR / "babelnovel_content.py"),
+                   "--url", canonical,
+                   "--start", str(start_ch),
+                   "--end", str(end_ch),
+                   "--output", book_dir]
+            rc = _run_script(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
+        elif mode == "subprocess" and platform == "hengyan":
+            canonical = result.get("canonical_url", "")
+            cmd = [sys.executable, str(SCRIPT_DIR / "hengyan/s.py"),
+                   "--book-url", canonical,
+                   "--book-name", book_name,
+                   "--start-chapter", str(start_ch),
+                   "--end-chapter", str(end_ch),
+                   "--output-dir", book_dir]
+            rc = _run_script(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
+        elif mode == "subprocess" and platform == "69shuba":
+            start_url = scraper_args.get("start_url") or result.get("canonical_url", "")
+            cmd = [sys.executable, str(SCRIPT_DIR / "69shuba_new.py"),
+                   "--start-url", start_url,
+                   "--book-name", book_name,
+                   "--start-chapter", str(start_ch),
+                   "--end-chapter", str(end_ch),
+                   "--output-dir", book_dir]
+            rc = _run_script(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
+        elif mode == "subprocess" and platform == "wattpad":
+            canonical = result.get("canonical_url", "")
+            cmd = [sys.executable, str(SCRIPT_DIR / "wattpad_content.py"),
+                   "--url", canonical,
+                   "--book-name", book_name,
+                   "--start-chapter", str(start_ch),
+                   "--end-chapter", str(end_ch),
+                   "--output-dir", book_dir]
+            rc = _run_script(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
         else:
-            # Browser-based: show config guide
+            # Platforms that require special manual setup (kakao, qdmm, freewebnovel, etc.)
             scraper = result.get("scraper_script", "")
             canonical = result.get("canonical_url", "")
 
-            log(f"\nPlatform '{platform}' uses a browser-based scraper.")
+            log(f"\nPlatform '{platform}' requires manual setup.")
             log(f"Script: py Scripts/{scraper}")
             log(f"\nOpen the script and set these values at the top:")
             log("-" * 44)
 
-            if platform == "webnovel":
-                log(f'  book_url      = "{canonical}"')
-                log(f'  start_chapter = {start_ch}')
-                log(f'  end_chapter   = {end_ch}')
-            elif platform in ("69shuba", "hengyan"):
-                log(f'  start_url     = "{scraper_args.get("start_url", canonical)}"')
-                log(f'  book_name     = "{book_name}"')
-                log(f'  start_chapter = {start_ch}')
-                log(f'  end_chapter   = {end_ch}')
-            elif platform == "babelnovel":
-                log(f'  # Log in manually in Chrome, then set:')
-                log(f'  book_url = "{canonical}"')
-            elif platform == "tapas":
-                log(f'  start_url    = "{scraper_args.get("start_url", canonical)}"')
-                log(f'  book_name    = "{book_name}"')
-                log(f'  max_chapters = {end_ch - start_ch + 1}')
-            elif platform in ("wuxiaworld", "wattpad"):
-                log(f'  url = "{canonical}"')
-            elif platform in ("qidian", "qdmm"):
+            if platform in ("qidian", "qdmm"):
                 log(f'  book_url      = "{canonical}"')
                 log(f'  book_name     = "{book_name}"')
                 log(f'  start_chapter = {start_ch}')
                 log(f'  end_chapter   = {end_ch}')
             elif platform == "kakao":
                 log(f'  # Requires Korean account login.')
+                log(f'  book_url = "{canonical}"')
+            elif platform == "freewebnovel":
                 log(f'  book_url = "{canonical}"')
             else:
                 for k, v in scraper_args.items():

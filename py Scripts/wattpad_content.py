@@ -334,40 +334,49 @@ def process_story(url, story_name, start_chapter, end_chapter, output_folder):
 
 # Main execution
 if __name__ == "__main__":
+    import argparse as _argparse
+    _parser = _argparse.ArgumentParser(description="Wattpad story scraper", add_help=True)
+    _parser.add_argument("--url", default=None, help="Story URL")
+    _parser.add_argument("--book-name", default=None, help="Story name")
+    _parser.add_argument("--start-chapter", type=int, default=1)
+    _parser.add_argument("--end-chapter", type=int, default=500)
+    _parser.add_argument("--output-dir", default=None, help="Output folder path")
+    _args = _parser.parse_args()
+
     try:
-        # Initialize driver
         print("🚀 Initializing Chrome driver...")
         driver = setup_driver()
         print("✅ Driver initialized successfully\n")
-        
-        # Create base output folder structure
-        base_folder = create_folder_structure(BASE_OUTPUT_FOLDER)
-        print(f"📁 Output folder: {os.path.abspath(base_folder)}\n")
-        
-        # Login once at the beginning
+
         print("🔐 Logging in to Wattpad...\n")
         login_to_wattpad()
-        
-        # Process each URL
-        total_stories = len(URLS_TO_PROCESS)
-        successful = 0
-        failed = 0
-        
-        for idx, (url, name, start, end) in enumerate(URLS_TO_PROCESS, 1):
-            print(f"\n⏳ Processing story {idx}/{total_stories}...")
-            if process_story(url, name, start, end, base_folder):
-                successful += 1
-            else:
-                failed += 1
-        
-        # Print summary
-        print(f"\n{'='*70}")
-        print(f"📊 SUMMARY")
-        print(f"{'='*70}")
-        print(f"✅ Successful: {successful}/{total_stories}")
-        print(f"❌ Failed: {failed}/{total_stories}")
-        print(f"📁 Output folder: {os.path.abspath(base_folder)}\n")
-        
+
+        if _args.url and _args.book_name:
+            # Single story mode (launched by scraper_server)
+            out_folder = _args.output_dir or BASE_OUTPUT_FOLDER
+            os.makedirs(out_folder, exist_ok=True)
+            print(f"📁 Output folder: {os.path.abspath(out_folder)}\n")
+            process_story(_args.url, _args.book_name, _args.start_chapter, _args.end_chapter, out_folder)
+        else:
+            # Legacy batch mode
+            base_folder = create_folder_structure(BASE_OUTPUT_FOLDER)
+            print(f"📁 Output folder: {os.path.abspath(base_folder)}\n")
+            total_stories = len(URLS_TO_PROCESS)
+            successful = 0
+            failed = 0
+            for idx, (url, name, start, end) in enumerate(URLS_TO_PROCESS, 1):
+                print(f"\n⏳ Processing story {idx}/{total_stories}...")
+                if process_story(url, name, start, end, base_folder):
+                    successful += 1
+                else:
+                    failed += 1
+            print(f"\n{'='*70}")
+            print(f"📊 SUMMARY")
+            print(f"{'='*70}")
+            print(f"✅ Successful: {successful}/{total_stories}")
+            print(f"❌ Failed: {failed}/{total_stories}")
+            print(f"📁 Output folder: {os.path.abspath(base_folder)}\n")
+
     except Exception as e:
         print(f"❌ Fatal error: {e}")
         import traceback

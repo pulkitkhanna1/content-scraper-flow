@@ -149,8 +149,9 @@ def sanitize_text(text):
             cleaned.append(' ')
     return ''.join(cleaned)
 
-def scrape_chapters(start_url, start_chapter, end_chapter, book_name):
-    output_dir = book_name
+def scrape_chapters(start_url, start_chapter, end_chapter, book_name, output_dir=None):
+    if output_dir is None:
+        output_dir = book_name
     os.makedirs(output_dir, exist_ok=True)
 
     # --------------------------
@@ -348,10 +349,13 @@ def scrape_chapters(start_url, start_chapter, end_chapter, book_name):
             pass
 
 
-# === Configuration ===
-start_url = "https://www.69shuba.com/txt/84861/39386250"
-book_name = "The head chef in the kitchen has won another"
-start_chapter = 1
-end_chapter = 10
-
-scrape_chapters(start_url, start_chapter, end_chapter, book_name)
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="69shuba chapter scraper")
+    parser.add_argument("--start-url", required=True, help="URL of first chapter")
+    parser.add_argument("--book-name", required=True, help="Book name for output files")
+    parser.add_argument("--start-chapter", type=int, default=1)
+    parser.add_argument("--end-chapter", type=int, required=True)
+    parser.add_argument("--output-dir", default=None, help="Output folder path")
+    args = parser.parse_args()
+    scrape_chapters(args.start_url, args.start_chapter, args.end_chapter, args.book_name, args.output_dir)
