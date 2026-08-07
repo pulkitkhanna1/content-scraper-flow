@@ -763,7 +763,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                 cmd += ["--email", login_email]
             if login_password:
                 cmd += ["--password", login_password]
-            rc = _run_script(cmd, log, stop)
+            rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
@@ -775,7 +775,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    "--start-chapter", str(start_ch),
                    "--max-chapters", str(end_ch - start_ch + 1),
                    "--out", book_dir]
-            rc = _run_script(cmd, log, stop)
+            rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
@@ -787,7 +787,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    "--start", str(start_ch),
                    "--end", str(end_ch),
                    "--output", book_dir]
-            rc = _run_script(cmd, log, stop)
+            rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
@@ -799,7 +799,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    "--start-chapter", str(start_ch),
                    "--end-chapter", str(end_ch),
                    "--output-dir", book_dir]
-            rc = _run_script(cmd, log, stop)
+            rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
@@ -811,7 +811,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    "--start-chapter", str(start_ch),
                    "--end-chapter", str(end_ch),
                    "--output-dir", book_dir]
-            rc = _run_script(cmd, log, stop)
+            rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
@@ -827,7 +827,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                 cmd += ["--email", login_email]
             if login_password:
                 cmd += ["--password", login_password]
-            rc = _run_script(cmd, log, stop)
+            rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
@@ -921,6 +921,17 @@ def api_drive_status():
         "url_set":   ready,
         "folder_id": GDRIVE_FOLDER_ID,
     })
+
+
+PLATFORM_CREDS = {
+    "webnovel": {"email": "fantasy.team@pocketfm.com",      "password": "0ForFantasyOnly0"},
+    "wattpad":  {"email": "shohtaj_singh@pocketfm.com",     "password": "PocketContent@123"},
+}
+
+@app.route("/api/platform-creds/<platform>")
+def api_platform_creds(platform):
+    creds = PLATFORM_CREDS.get(platform, {})
+    return jsonify(creds)
 
 
 @app.route("/api/drive-auth", methods=["POST"])
@@ -1580,6 +1591,10 @@ function startScrape() {
       'Login — ' + platform.charAt(0).toUpperCase() + platform.slice(1);
     document.getElementById('login-email').value = '';
     document.getElementById('login-password').value = '';
+    fetch('/api/platform-creds/' + platform).then(r => r.json()).then(c => {
+      if (c.email)    document.getElementById('login-email').value = c.email;
+      if (c.password) document.getElementById('login-password').value = c.password;
+    }).catch(() => {});
   } else {
     _doScrape('', '');
   }
