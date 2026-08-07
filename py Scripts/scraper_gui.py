@@ -812,7 +812,8 @@ class ScraperApp(tk.Tk):
                          canonical,
                          "--out-dir", out_dir,
                          "--start-chapter", str(start_ch),
-                         "--end-chapter", str(end_ch)],
+                         "--end-chapter", str(end_ch),
+                         "--headless"],
                         self._log, self._stop_event
                     )
 

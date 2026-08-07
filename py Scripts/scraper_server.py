@@ -895,7 +895,8 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    canonical,
                    "--out-dir", book_dir,
                    "--start-chapter", str(start_ch),
-                   "--end-chapter", str(end_ch)]
+                   "--end-chapter", str(end_ch),
+                   "--headless"]
             if login_email:
                 cmd += ["--email", login_email]
             if login_password:
