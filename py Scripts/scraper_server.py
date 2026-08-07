@@ -789,15 +789,15 @@ PLATFORM_MODE = {
     "allnovel":     "inline",
     "royalroad":    "inline",
     "freewebnovel": "hardcoded",   # Cloudflare-blocked; keep as manual
-    "webnovel":     "inline",
-    "wuxiaworld":   "inline",
+    "webnovel":     "subprocess",  # Cloudflare-resistant
+    "wuxiaworld":   "subprocess",  # Cloudflare-resistant
     "69shuba":      "subprocess",
     "babelnovel":   "subprocess",
     "tapas":        "subprocess",
     "wattpad":      "subprocess",
     "kakao":        "hardcoded",   # OCR + Korean auth; manual only
-    "qidian":       "hardcoded",   # 2captcha + ZH auth; manual only
-    "qdmm":         "hardcoded",   # 2captcha + ZH auth; manual only
+    "qidian":       "subprocess",  # Cloudflare-resistant
+    "qdmm":         "subprocess",  # Cloudflare-resistant
     "hengyan":      "subprocess",
 }
 
@@ -868,14 +868,26 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
             book_url = scraper_args.get("book_url") or result.get("canonical_url")
             scrape_freewebnovel(book_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
 
-        elif mode == "inline" and platform == "wuxiaworld":
+        elif mode == "subprocess" and platform == "wuxiaworld":
             slug = scraper_args.get("slug")
             first_ch_url = scraper_args.get("first_chapter_url", "")
             if slug:
                 start_url = f"https://www.wuxiaworld.com/novel/{slug}/{slug}-chapter-{start_ch}"
             else:
                 start_url = first_ch_url or result.get("canonical_url")
-            scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete, cookies_str=cookies_str)
+            cmd = [sys.executable, str(SCRIPT_DIR / "wuxiaworld_next.py"),
+                   "--start", str(start_ch),
+                   "--end", str(end_ch),
+                   "--start-url", start_url,
+                   "--output-folder", book_dir,
+                   "--filename-pattern", "Chapters_{batch_start}_{batch_end}.docx"]
+            if login_email:
+                cmd += ["--email", login_email]
+            if login_password:
+                cmd += ["--password", login_password]
+            rc = run_subprocess(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
 
         elif mode == "subprocess" and platform == "webnovel":
             canonical = result.get("canonical_url", "")
@@ -888,6 +900,21 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                 cmd += ["--email", login_email]
             if login_password:
                 cmd += ["--password", login_password]
+            rc = run_subprocess(cmd, log, stop)
+            if use_drive and rc == 0:
+                _upload_dir_docx(book_dir, log, safe)
+
+        elif mode == "subprocess" and platform in ("qidian", "qdmm"):
+            canonical = result.get("canonical_url", "")
+            cmd = [sys.executable, str(SCRIPT_DIR / "qdmm_content_new.py"),
+                   canonical,
+                   "--book-name", book_name,
+                   "--start-chapter", str(start_ch),
+                   "--end-chapter", str(end_ch),
+                   "--output-folder", book_dir,
+                   "--headless"]
+            if cookies_str:
+                cmd += ["--cookies", cookies_str]
             rc = run_subprocess(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)

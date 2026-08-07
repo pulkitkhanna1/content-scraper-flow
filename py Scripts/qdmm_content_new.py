@@ -121,23 +121,46 @@ def run_with_timeout(func, args=(), kwargs=None, timeout=CHAPTER_TIMEOUT):
 # COOKIE PARSER
 # ──────────────────────────────────────────────
 
-def parse_cookie_string(cookie_json):
-    """Parse browser-exported JSON cookie array into Selenium cookie dicts."""
-    raw = json.loads(cookie_json)
+def parse_cookie_string(cookie_str):
+    """Parse either browser-exported JSON cookie array or name=value cookie string into Selenium cookie dicts."""
+    cookie_str = cookie_str.strip()
+    if not cookie_str:
+        return []
+
+    # Check if it looks like a JSON array
+    if cookie_str.startswith("[") and cookie_str.endswith("]"):
+        try:
+            raw = json.loads(cookie_str)
+            cookies = []
+            for c in raw:
+                cookie = {
+                    "name": c["name"],
+                    "value": c["value"],
+                    "domain": c.get("domain", ".qidian.com"),
+                    "path": c.get("path", "/"),
+                    "secure": bool(c.get("secure", False)),
+                    "httpOnly": bool(c.get("httpOnly", False)),
+                }
+                exp = c.get("expirationDate")
+                if exp is not None:
+                    cookie["expiry"] = int(exp)
+                cookies.append(cookie)
+            return cookies
+        except Exception as e:
+            print(f"Error parsing JSON cookies: {e}")
+
+    # Fallback: semicolon-separated name=value pairs
     cookies = []
-    for c in raw:
-        cookie = {
-            "name": c["name"],
-            "value": c["value"],
-            "domain": c.get("domain", ".qidian.com"),
-            "path": c.get("path", "/"),
-            "secure": bool(c.get("secure", False)),
-            "httpOnly": bool(c.get("httpOnly", False)),
-        }
-        exp = c.get("expirationDate")
-        if exp is not None:
-            cookie["expiry"] = int(exp)
-        cookies.append(cookie)
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            cookies.append({
+                "name": k.strip(),
+                "value": v.strip(),
+                "domain": ".qidian.com",
+                "path": "/"
+            })
     return cookies
 
 
@@ -356,7 +379,7 @@ def kill_driver(driver):
         pass
 
 
-def create_driver():
+def create_driver(headless=False):
     print("\n🚀 Launching fresh Chrome...")
     options = uc.ChromeOptions()
     options.add_argument("--start-maximized")
@@ -369,7 +392,7 @@ def create_driver():
         options=options,
         version_main=150,
         use_subprocess=True,
-        headless=False,
+        headless=headless,
     )
 
     driver.set_page_load_timeout(45)
@@ -380,9 +403,9 @@ def create_driver():
     return driver
 
 
-def create_driver_with_cookies():
+def create_driver_with_cookies(headless=False):
     """Create a fresh driver and inject cookies. Returns the driver."""
-    driver = create_driver()
+    driver = create_driver(headless=headless)
 
     print("🌐 Loading qidian.com to set cookies...")
     try:
@@ -687,6 +710,49 @@ class DocxBatchWriter:
 # ──────────────────────────────────────────────
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="QDMM/Qidian Scraper")
+    parser.add_argument("book_url", nargs="?", default=None, help="Qidian book page URL")
+    parser.add_argument("--book-name", default=None, help="Name of the book (for docx output)")
+    parser.add_argument("--start-chapter", "-s", type=int, default=None, help="Start chapter number")
+    parser.add_argument("--end-chapter", "-e", type=int, default=None, help="End chapter number")
+    parser.add_argument("--output-folder", "-o", default=None, help="Output folder path")
+    parser.add_argument("--cookies", default=None, help="Pasted cookies string or file path")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode")
+    args = parser.parse_args()
+
+    global BOOK_URL, BOOK_NAME, START_CHAPTER, END_CHAPTER, OUTPUT_FOLDER, CHECKPOINT_FILE, BOOK_ID, COOKIES_JSON
+
+    if args.book_url:
+        BOOK_URL = args.book_url
+        BOOK_ID = BOOK_URL.rstrip("/").split("/")[-1]
+    if args.book_name:
+        BOOK_NAME = args.book_name
+    if args.start_chapter is not None:
+        START_CHAPTER = args.start_chapter
+    if args.end_chapter is not None:
+        END_CHAPTER = args.end_chapter
+    if args.output_folder:
+        OUTPUT_FOLDER = args.output_folder
+    else:
+        OUTPUT_FOLDER = f"qdmm_docs_{BOOK_ID}"
+        
+    CHECKPOINT_FILE = f"qdmm_chapter_checkpoint_{BOOK_ID}.json"
+
+    if args.cookies:
+        if os.path.exists(args.cookies):
+            try:
+                with open(args.cookies, "r", encoding="utf-8") as f:
+                    COOKIES_JSON = f.read()
+            except Exception as e:
+                print(f"Error reading cookies file: {e}")
+        else:
+            COOKIES_JSON = args.cookies
+
+    headless_mode = False
+    if args.headless:
+        headless_mode = True
+
     print("=" * 70)
     print("QDMM Chapter Content Scraper — DOCX + Watchdog Timeout")
     print("=" * 70)
@@ -697,6 +763,7 @@ def main():
     print(f"📂 Output folder: {OUTPUT_FOLDER}")
     print(f"⏱  Chapter timeout: {CHAPTER_TIMEOUT}s")
     print(f"🔄 Restart every {BATCH_SIZE} chapters")
+    print(f"👻 Headless: {headless_mode}")
     print()
 
     # Load checkpoint
@@ -708,7 +775,7 @@ def main():
         print(f"🔄 Resuming — {len(completed)} chapters already done\n")
 
     # ── Phase 1: Extract chapter links (needs a driver) ──
-    driver = create_driver_with_cookies()
+    driver = create_driver_with_cookies(headless=headless_mode)
     chapters = extract_chapter_links(driver, BOOK_URL, START_CHAPTER, END_CHAPTER)
 
     if not chapters:
@@ -744,8 +811,6 @@ def main():
             ch_url = ch["chapter_url"]
 
             # ── Proactive restart every BATCH_SIZE chapters ──
-            # FIX: No `continue` here — fall through to recreate driver
-            #      and then scrape the CURRENT chapter (not skip to next).
             if batch_count >= BATCH_SIZE:
                 print(f"\n🔄 Batch limit ({BATCH_SIZE}) — recycling driver...")
                 doc_writer.save_all()
@@ -753,7 +818,6 @@ def main():
                 driver = None
 
             # ── Restart on consecutive failures ──
-            # FIX: No `continue` here either — same reason.
             if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
                 print(f"\n🔄 {MAX_CONSECUTIVE_FAILS} consecutive failures — recycling driver...")
                 doc_writer.save_all()
@@ -762,12 +826,11 @@ def main():
                 consecutive_fails = 0
 
             # ── Create driver if we don't have one ──
-            # Handles: first chapter, batch restart, fail restart, timeout kill.
             if driver is None:
                 cooldown = random.uniform(COOLDOWN_MIN, COOLDOWN_MAX)
                 print(f"   ⏳ Cooling down {cooldown:.1f}s before new driver...")
                 time.sleep(cooldown)
-                driver = create_driver_with_cookies()
+                driver = create_driver_with_cookies(headless=headless_mode)
                 batch_count = 0
 
             # ── Delay between chapters ──
@@ -780,8 +843,6 @@ def main():
             # ── Scrape with timeout + retries ──
             success = False
             for attempt in range(1, 4):
-                # On retry (attempt 2+), always restart the driver — not just
-                # when it's dead. Reusing a stale session rarely helps.
                 if attempt > 1:
                     retry_delay = random.uniform(5, 12)
                     print(f"  Retry {attempt}/3 — restarting driver, waiting {retry_delay:.1f}s")
@@ -793,7 +854,7 @@ def main():
                     cooldown = random.uniform(COOLDOWN_MIN, COOLDOWN_MAX)
                     print(f"   ⏳ Cooling down {cooldown:.1f}s before new driver...")
                     time.sleep(cooldown)
-                    driver = create_driver_with_cookies()
+                    driver = create_driver_with_cookies(headless=headless_mode)
                     batch_count = 0
 
                 try:
@@ -816,8 +877,8 @@ def main():
                         consecutive_fails = 0
 
                         print(f"  ✅ {final_name[:60]}")
-                        print(f"     {char_count} chars, {len(paragraphs)} paras | "
-                              f"Progress: {total_scraped}/{total_to_scrape}")
+                        print(f"     {char_count} chars, {len(paragraphs)} paras | ")
+                        print(f"Progress: {total_scraped}/{total_to_scrape}")
 
                         success = True
                         break
@@ -827,7 +888,7 @@ def main():
                 except ChapterTimeoutError:
                     print(f"  ⏰ TIMEOUT after {CHAPTER_TIMEOUT}s — killing driver!")
                     kill_driver(driver)
-                    driver = None  # recreated at top of next attempt
+                    driver = None
                     continue
 
                 except Exception as e:

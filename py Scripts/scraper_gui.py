@@ -325,15 +325,15 @@ PLATFORM_MODE = {
     "novelbin":     "inline",
     "royalroad":    "inline",
     "freewebnovel": "argparse",
-    "webnovel":     "hardcoded",
+    "webnovel":     "argparse",
     "69shuba":      "hardcoded",
     "babelnovel":   "hardcoded",
     "tapas":        "hardcoded",
-    "wuxiaworld":   "hardcoded",
+    "wuxiaworld":   "argparse",
     "wattpad":      "hardcoded",
     "kakao":        "hardcoded",
-    "qidian":       "hardcoded",
-    "qdmm":         "hardcoded",
+    "qidian":       "argparse",
+    "qdmm":         "argparse",
     "hengyan":      "hardcoded",
 }
 
@@ -798,6 +798,59 @@ class ScraperApp(tk.Tk):
                          "--start-chapter", str(start_ch),
                          "--end-chapter", str(end_ch),
                          "--book-name", book_name],
+                        self._log, self._stop_event
+                    )
+
+            elif mode == "argparse" and platform == "webnovel":
+                canonical = result.get("canonical_url", "")
+                script = SCRIPT_DIR / "webnovel_content_uc.py"
+                if not script.exists():
+                    self._log(f"Script not found: {script}")
+                else:
+                    run_subprocess(
+                        [sys.executable, str(script),
+                         canonical,
+                         "--out-dir", out_dir,
+                         "--start-chapter", str(start_ch),
+                         "--end-chapter", str(end_ch)],
+                        self._log, self._stop_event
+                    )
+
+            elif mode == "argparse" and platform == "wuxiaworld":
+                slug = args.get("slug")
+                first_ch_url = args.get("first_chapter_url", "")
+                if slug:
+                    start_url = f"https://www.wuxiaworld.com/novel/{slug}/{slug}-chapter-{start_ch}"
+                else:
+                    start_url = first_ch_url or result.get("canonical_url")
+                script = SCRIPT_DIR / "wuxiaworld_next.py"
+                if not script.exists():
+                    self._log(f"Script not found: {script}")
+                else:
+                    run_subprocess(
+                        [sys.executable, str(script),
+                         "--start", str(start_ch),
+                         "--end", str(end_ch),
+                         "--start-url", start_url,
+                         "--output-folder", out_dir,
+                         "--filename-pattern", "Chapters_{batch_start}_{batch_end}.docx"],
+                        self._log, self._stop_event
+                    )
+
+            elif mode == "argparse" and platform in ("qidian", "qdmm"):
+                canonical = result.get("canonical_url", "")
+                script = SCRIPT_DIR / "qdmm_content_new.py"
+                if not script.exists():
+                    self._log(f"Script not found: {script}")
+                else:
+                    run_subprocess(
+                        [sys.executable, str(script),
+                         canonical,
+                         "--book-name", book_name,
+                         "--start-chapter", str(start_ch),
+                         "--end-chapter", str(end_ch),
+                         "--output-folder", out_dir,
+                         "--headless"],
                         self._log, self._stop_event
                     )
 

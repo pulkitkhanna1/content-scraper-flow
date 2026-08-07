@@ -236,7 +236,12 @@ def go_to_next_chapter(driver, current_title, current_url):
 # Main Scraper
 # --------------------------------------
 
-def scrape_wuxiaworld(start_chapter, end_chapter, start_url, output_folder, filename_pattern):
+def scrape_wuxiaworld(start_chapter, end_chapter, start_url, output_folder, filename_pattern, email=None, password=None):
+    global LOGIN_EMAIL, LOGIN_PASSWORD
+    if email:
+        LOGIN_EMAIL = email
+    if password:
+        LOGIN_PASSWORD = password
 
     # --- Chrome setup with headers ---
     chrome_options = Options()
@@ -373,6 +378,8 @@ if __name__ == "__main__":
     parser.add_argument("--filename-pattern", type=str,
                        default="Chapters_{batch_start}_{batch_end}.docx",
                        help="Filename pattern (use {batch_start}, {batch_end}, {file_index} as placeholders)")
+    parser.add_argument("--email", type=str, default=None, help="WuxiaWorld account email")
+    parser.add_argument("--password", type=str, default=None, help="WuxiaWorld account password")
     args = parser.parse_args()
 
-    scrape_wuxiaworld(args.start, args.end, args.start_url, args.output_folder, args.filename_pattern)
+    scrape_wuxiaworld(args.start, args.end, args.start_url, args.output_folder, args.filename_pattern, email=args.email, password=args.password)
