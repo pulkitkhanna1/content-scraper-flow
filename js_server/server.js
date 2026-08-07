@@ -14,7 +14,7 @@ import { URL }          from 'url';
 import fs               from 'fs';
 import path             from 'path';
 import { fileURLToPath } from 'url';
-import { exec }          from 'child_process';
+import { exec, spawn }  from 'child_process';
 import * as cheerio      from 'cheerio';
 import { Document, Packer, Paragraph, HeadingLevel, TextRun } from 'docx';
 // googleapis no longer needed — uploads go via Apps Script
@@ -408,6 +408,7 @@ async function runJob(jobId, platform, result, startCh, endCh, outDir, useDrive)
     ? async fp => { job.log(`Uploading to Drive: ${path.basename(fp)}...`); await uploadToDrive(fp, GDRIVE_FOLDER, m => job.log(m)); }
     : null;
 
+  let isAsync = false;
   try {
     job.log('='.repeat(50));
     job.log(`Scraping: ${bookName}`);
@@ -420,19 +421,106 @@ async function runJob(jobId, platform, result, startCh, endCh, outDir, useDrive)
     } else if (platform === 'royalroad') {
       await scrapeRoyalroad(args.url || result.canonical_url, bookName, startCh, endCh, outDir, job, onBatch);
     } else {
-      job.log(`\nPlatform '${platform}' uses a browser-based scraper.`);
-      job.log(`Script: py Scripts/${result.scraper_script || ''}`);
-      job.log('\nSet these values in the script:');
-      job.log('-'.repeat(44));
-      job.log(`  url           = "${result.canonical_url}"`);
-      job.log(`  start_chapter = ${startCh}`);
-      job.log(`  end_chapter   = ${endCh}`);
-      job.log('-'.repeat(44));
+      isAsync = true;
+      job.log(`\nPlatform '${platform}' requires Chrome. Spawning Python scraper script...`);
+      
+      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+      const scriptPath = path.join(__dirname, '..', 'py Scripts', result.scraper_script);
+      
+      let cmdArgs = [];
+      const canonical = result.canonical_url || '';
+      
+      if (platform === 'wuxiaworld') {
+        let startUrl = canonical;
+        const slug = args.slug;
+        if (slug) {
+          startUrl = `https://www.wuxiaworld.com/novel/${slug}/${slug}-chapter-${startCh}`;
+        }
+        cmdArgs = [
+          scriptPath,
+          '--start', startCh.toString(),
+          '--end', endCh.toString(),
+          '--start-url', startUrl,
+          '--output-folder', outDir,
+          '--filename-pattern', 'Chapters_{batch_start}_{batch_end}.docx'
+        ];
+      } else if (platform === 'webnovel') {
+        cmdArgs = [
+          scriptPath,
+          canonical,
+          '--out-dir', outDir,
+          '--start-chapter', startCh.toString(),
+          '--end-chapter', endCh.toString(),
+          '--headless'
+        ];
+      } else if (platform === 'qidian' || platform === 'qdmm') {
+        cmdArgs = [
+          scriptPath,
+          canonical,
+          '--book-name', bookName,
+          '--start-chapter', startCh.toString(),
+          '--end-chapter', endCh.toString(),
+          '--output-folder', outDir,
+          '--headless'
+        ];
+      } else {
+        // Fallback for other python scripts
+        cmdArgs = [
+          scriptPath,
+          canonical,
+          '--start-chapter', startCh.toString(),
+          '--end-chapter', endCh.toString(),
+          '--output-folder', outDir,
+          '--headless'
+        ];
+      }
+      
+      job.log(`Running: ${pythonCmd} ${cmdArgs.map(x => x.includes(' ') ? `"${x}"` : x).join(' ')}`);
+      
+      const child = spawn(pythonCmd, cmdArgs);
+      
+      child.stdout.on('data', (data) => {
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          if (line.trim()) job.log(line);
+        }
+      });
+      
+      child.stderr.on('data', (data) => {
+        const lines = data.toString().split('\n');
+        for (const line of lines) {
+          if (line.trim()) job.log(`[stderr] ${line}`);
+        }
+      });
+      
+      child.on('close', async (code) => {
+        job.log(`Scraper process exited with code ${code}`);
+        if (code === 0 && useDrive) {
+          try {
+            const bookDir = path.join(outDir, safeName(bookName));
+            if (fs.existsSync(bookDir)) {
+              const files = fs.readdirSync(bookDir);
+              for (const file of files) {
+                if (file.endsWith('.docx')) {
+                  const fp = path.join(bookDir, file);
+                  job.log(`Uploading to Drive: ${file}...`);
+                  await uploadToDrive(fp, GDRIVE_FOLDER, m => job.log(m));
+                }
+              }
+            }
+          } catch (ue) {
+            job.log(`Upload error: ${ue.message}`);
+          }
+        }
+        job.done();
+      });
     }
   } catch (e) {
     job.log(`\nError: ${e.message}`);
   } finally {
-    job.done();
+    if (!isAsync) {
+      job.done();
+    }
   }
 }
 
