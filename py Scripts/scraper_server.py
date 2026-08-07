@@ -457,11 +457,13 @@ def scrape_royalroad(start_url, book_name, start_ch, end_ch, out_dir, log, stop,
         on_file_complete(out_path)
 
 
-def scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
+def scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None, cookies_str=""):
     safe = _safe_name(book_name)
     book_dir = os.path.join(out_dir, "scraped_novels", safe)
     os.makedirs(book_dir, exist_ok=True)
     log(f"Output: {book_dir}")
+
+    cookies = _parse_cookie_str(cookies_str) if cookies_str else {}
 
     ch_num = start_ch
     file_idx = (ch_num - 1) // CHAPTERS_PER_FILE + 1
@@ -475,7 +477,7 @@ def scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop
             break
         for attempt in range(1, 4):
             try:
-                resp = _requests.get(url, headers=HEADERS, timeout=15)
+                resp = _requests.get(url, headers=HEADERS, cookies=cookies, timeout=15)
                 if resp.status_code == 404:
                     log(f"  Chapter {ch_num}: 404 — no more chapters")
                     url = None
@@ -861,7 +863,7 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                 start_url = f"https://www.wuxiaworld.com/novel/{slug}/{slug}-chapter-{start_ch}"
             else:
                 start_url = first_ch_url or result.get("canonical_url")
-            scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
+            scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete, cookies_str=cookies_str)
 
         elif mode == "subprocess" and platform == "webnovel":
             canonical = result.get("canonical_url", "")
@@ -1693,7 +1695,7 @@ function useUrl(url) {
 
 // ── Scraping ──────────────────────────────────────────────────────────────────
 const LOGIN_PLATFORMS  = ['wattpad'];
-const COOKIE_PLATFORMS = ['webnovel'];
+const COOKIE_PLATFORMS = ['webnovel', 'wuxiaworld'];
 
 function startScrape() {
   if (!detectionResult) { log('Run Detect first.', 'err'); return; }
