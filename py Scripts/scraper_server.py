@@ -901,7 +901,18 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
             if login_password:
                 cmd += ["--password", login_password]
             rc = run_subprocess(cmd, log, stop)
-            if use_drive and rc == 0:
+            if rc != 0:
+                log("\n⚠️ Chrome scraper failed. Falling back to inline API-based scraping...")
+                book_id = scraper_args.get("book_id") or result.get("book_id", "")
+                if not book_id:
+                    import re as _re
+                    m = _re.search(r"_(\d+)$", canonical.rstrip("/").split("/")[-1])
+                    book_id = m.group(1) if m else ""
+                if not cookies_str:
+                    log("Error: Webnovel fallback requires cookies. Please paste them in the cookie field.")
+                else:
+                    scrape_webnovel(book_id, book_name, start_ch, end_ch, out_dir, cookies_str, log, stop, on_file_complete)
+            elif use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
 
         elif mode == "subprocess" and platform in ("qidian", "qdmm"):
