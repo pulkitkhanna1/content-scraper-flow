@@ -415,25 +415,36 @@ def _get_local_chrome_major() -> Optional[int]:
 
 def create_driver(headless: bool = HEADLESS) -> uc.Chrome:
     logger.info("Launching fresh undetected Chrome...")
-    opts = uc.ChromeOptions()
-    if headless:
-        opts.add_argument("--headless=new")
-    opts.add_argument("--start-maximized")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--log-level=3")
-    opts.add_argument("--dns-prefetch-disable")
+    
+    def get_opts():
+        opts = uc.ChromeOptions()
+        if headless:
+            opts.add_argument("--headless=new")
+        opts.add_argument("--start-maximized")
+        opts.add_argument("--window-size=1920,1080")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
+        opts.add_argument("--log-level=3")
+        opts.add_argument("--dns-prefetch-disable")
+        return opts
 
     chrome_major = _get_local_chrome_major()
     try:
+        opts = get_opts()
         if chrome_major:
             driver = uc.Chrome(options=opts, use_subprocess=True, headless=headless, version_main=chrome_major)
         else:
             driver = uc.Chrome(options=opts, use_subprocess=True, headless=headless)
-    except TypeError:
+    except TypeError as e:
+        if "Binary Location Must be a String" in str(e):
+            logger.error("Google Chrome is not installed on this system! "
+                         "If you are deploying on Render, you must add the Chrome Buildpack to your settings: "
+                         "https://github.com/render-examples/chrome-buildpack.git")
+            raise RuntimeError("Google Chrome not found. Please install Chrome or add the Render Chrome Buildpack.") from e
         # older UC versions don't accept version_main or headless as kwarg
+        logger.info("Retrying with fallback options...")
+        opts = get_opts()
         driver = uc.Chrome(options=opts, use_subprocess=True)
 
     driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
