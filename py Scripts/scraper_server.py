@@ -560,6 +560,105 @@ def scrape_wuxiaworld(start_url, book_name, start_ch, end_ch, out_dir, log, stop
     log(f"Done. Files saved in: {book_dir}")
 
 
+def _parse_cookie_str(cookie_str: str) -> dict:
+    """Parse a document.cookie-style string into a dict."""
+    cookies = {}
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            cookies[k.strip()] = v.strip()
+    return cookies
+
+
+def scrape_webnovel(book_id, book_name, start_ch, end_ch, out_dir, cookies_str, log, stop, on_file_complete=None):
+    """Scrape webnovel.com using session cookies + internal JSON API — no browser needed."""
+    safe = _safe_name(book_name)
+    book_dir = os.path.join(out_dir, "scraped_novels", safe)
+    os.makedirs(book_dir, exist_ok=True)
+
+    cookies = _parse_cookie_str(cookies_str)
+    headers = {**HEADERS, "Referer": "https://www.webnovel.com/", "Accept": "application/json, */*"}
+
+    # 1. Get chapter list
+    log("Fetching chapter list from webnovel API...")
+    try:
+        resp = _requests.get(
+            f"https://www.webnovel.com/go/pcm/chapter/getChapterList?bookId={book_id}",
+            headers=headers, cookies=cookies, timeout=20
+        )
+        data = resp.json()
+        all_chapters = data.get("data", {}).get("chapterItems", [])
+        if not all_chapters:
+            log(f"  API returned no chapters (status {resp.status_code}). Check your cookies.")
+            return
+    except Exception as e:
+        log(f"  Failed to fetch chapter list: {e}")
+        return
+
+    log(f"  Total chapters available: {len(all_chapters)}")
+    chapters_to_scrape = all_chapters[start_ch - 1 : end_ch]
+    log(f"  Scraping chapters {start_ch}–{start_ch + len(chapters_to_scrape) - 1}")
+
+    # 2. Write chapters
+    file_idx = (start_ch - 1) // CHAPTERS_PER_FILE + 1
+    ch_in_file = (start_ch - 1) % CHAPTERS_PER_FILE
+    out_path = _file_path(book_dir, safe, file_idx)
+    doc = Document(out_path) if os.path.exists(out_path) else Document()
+
+    for i, ch in enumerate(chapters_to_scrape):
+        if stop.is_set():
+            log("Stopped.")
+            break
+
+        ch_no = start_ch + i
+        ch_id = ch.get("chapterId") or ch.get("id", "")
+        ch_name = ch.get("chapterName") or ch.get("name") or f"Chapter {ch_no}"
+        log(f"  [{ch_no}] {ch_name}")
+
+        try:
+            resp = _requests.get(
+                f"https://www.webnovel.com/go/pcm/chapter/getContent?type=9"
+                f"&bookId={book_id}&chapterId={ch_id}",
+                headers=headers, cookies=cookies, timeout=20
+            )
+            cdata = resp.json()
+            ch_info = cdata.get("data", {}).get("chapterInfo", {})
+            html_content = ch_info.get("content", "")
+            if not html_content:
+                log(f"    (empty — VIP/locked chapter)")
+                paragraphs = ["[VIP chapter — unlock required]"]
+            else:
+                soup = BeautifulSoup(html_content, "html.parser")
+                paragraphs = [p.get_text() for p in soup.find_all("p") if p.get_text(strip=True)]
+                if not paragraphs:
+                    paragraphs = [t.strip() for t in soup.get_text("\n").split("\n") if t.strip()]
+        except Exception as e:
+            log(f"    Error: {e}")
+            paragraphs = [f"[Error fetching chapter: {e}]"]
+
+        doc.add_heading(ch_name, level=1)
+        for para in paragraphs:
+            doc.add_paragraph(para)
+
+        ch_in_file += 1
+        if ch_in_file >= CHAPTERS_PER_FILE:
+            doc.save(out_path)
+            if on_file_complete:
+                on_file_complete(out_path)
+            file_idx += 1
+            ch_in_file = 0
+            out_path = _file_path(book_dir, safe, file_idx)
+            doc = Document()
+
+        time.sleep(0.8)
+
+    doc.save(out_path)
+    if on_file_complete:
+        on_file_complete(out_path)
+    log(f"Done. Files saved in: {book_dir}")
+
+
 def scrape_freewebnovel(book_url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete=None):
     safe = _safe_name(book_name)
     book_dir = os.path.join(out_dir, "scraped_novels", safe)
@@ -676,7 +775,7 @@ PLATFORM_MODE = {
     "allnovel":     "inline",
     "royalroad":    "inline",
     "freewebnovel": "hardcoded",   # Cloudflare-blocked; keep as manual
-    "webnovel":     "subprocess",
+    "webnovel":     "inline",
     "wuxiaworld":   "inline",
     "69shuba":      "subprocess",
     "babelnovel":   "subprocess",
@@ -700,7 +799,7 @@ def _upload_dir_docx(book_dir: str, log_fn, subfolder_name: str = ""):
         upload_to_drive(str(f), GDRIVE_FOLDER_ID, log_fn, subfolder_name=subfolder_name)
 
 
-def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=False, login_email="", login_password=""):
+def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=False, login_email="", login_password="", cookies_str=""):
     job = _jobs[jid]
     log = lambda msg: job["log_queue"].put(str(msg))
     stop = job["stop_event"]
@@ -734,6 +833,18 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
         elif mode == "inline" and platform == "allnovel":
             url = scraper_args.get("start_url") or result.get("canonical_url")
             scrape_allnovel(url, book_name, start_ch, end_ch, out_dir, log, stop, on_file_complete)
+
+        elif mode == "inline" and platform == "webnovel":
+            book_id = scraper_args.get("book_id") or result.get("book_id", "")
+            if not book_id:
+                # Extract from canonical URL
+                import re as _re
+                m = _re.search(r"_(\d+)$", result.get("canonical_url", "").rstrip("/").split("/")[-1])
+                book_id = m.group(1) if m else ""
+            if not cookies_str:
+                log("Error: webnovel requires cookies. Paste them in the login modal.")
+            else:
+                scrape_webnovel(book_id, book_name, start_ch, end_ch, out_dir, cookies_str, log, stop, on_file_complete)
 
         elif mode == "inline" and platform == "royalroad":
             url = scraper_args.get("url") or result.get("canonical_url")
@@ -899,6 +1010,7 @@ def api_scrape():
     use_drive  = bool(data.get("upload_to_drive", False))
     login_email    = data.get("email", "").strip()
     login_password = data.get("password", "").strip()
+    cookies_str    = data.get("cookies", "").strip()
 
     if not platform:
         return jsonify({"error": "No detection result. Run Detect first."}), 400
@@ -907,7 +1019,7 @@ def api_scrape():
     jid = _new_job()
     threading.Thread(
         target=_run_scrape_job,
-        args=(jid, platform, result, start_ch, end_ch, out_dir, use_drive, login_email, login_password),
+        args=(jid, platform, result, start_ch, end_ch, out_dir, use_drive, login_email, login_password, cookies_str),
         daemon=True,
     ).start()
     return jsonify({"job_id": jid})
@@ -1580,15 +1692,27 @@ function useUrl(url) {
 }
 
 // ── Scraping ──────────────────────────────────────────────────────────────────
-const LOGIN_PLATFORMS = ['webnovel', 'wattpad'];
+const LOGIN_PLATFORMS  = ['wattpad'];
+const COOKIE_PLATFORMS = ['webnovel'];
 
 function startScrape() {
   if (!detectionResult) { log('Run Detect first.', 'err'); return; }
   const platform = detectionResult.platform || '';
-  if (LOGIN_PLATFORMS.includes(platform)) {
+  if (COOKIE_PLATFORMS.includes(platform)) {
+    // Show cookie-paste modal
+    document.getElementById('login-modal').style.display = 'flex';
+    document.getElementById('login-modal-title').textContent =
+      'Paste Cookies — ' + platform.charAt(0).toUpperCase() + platform.slice(1);
+    document.getElementById('login-fields').style.display = 'none';
+    document.getElementById('cookie-field').style.display = 'block';
+    document.getElementById('login-cookies').value = '';
+  } else if (LOGIN_PLATFORMS.includes(platform)) {
+    // Show email/password modal
     document.getElementById('login-modal').style.display = 'flex';
     document.getElementById('login-modal-title').textContent =
       'Login — ' + platform.charAt(0).toUpperCase() + platform.slice(1);
+    document.getElementById('login-fields').style.display = 'block';
+    document.getElementById('cookie-field').style.display = 'none';
     document.getElementById('login-email').value = '';
     document.getElementById('login-password').value = '';
     fetch('/api/platform-creds/' + platform).then(r => r.json()).then(c => {
@@ -1596,22 +1720,23 @@ function startScrape() {
       if (c.password) document.getElementById('login-password').value = c.password;
     }).catch(() => {});
   } else {
-    _doScrape('', '');
+    _doScrape('', '', '');
   }
 }
 
 function submitLogin() {
   const email    = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value.trim();
+  const cookies  = document.getElementById('login-cookies').value.trim();
   document.getElementById('login-modal').style.display = 'none';
-  _doScrape(email, password);
+  _doScrape(email, password, cookies);
 }
 
 function cancelLogin() {
   document.getElementById('login-modal').style.display = 'none';
 }
 
-async function _doScrape(email, password) {
+async function _doScrape(email, password, cookies) {
   const startCh = parseInt(document.getElementById('start-ch').value) || 1;
   const endCh   = parseInt(document.getElementById('end-ch').value)   || 100;
   const outDir  = '';
@@ -1634,6 +1759,7 @@ async function _doScrape(email, password) {
         upload_to_drive: true,
         email:    email,
         password: password,
+        cookies:  cookies,
       })
     });
     const data = await res.json();
@@ -1721,18 +1847,34 @@ function setProgress(on) {
 
 <!-- Login Modal -->
 <div id="login-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;align-items:center;justify-content:center;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px 32px;width:340px;max-width:90vw;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px 32px;width:380px;max-width:90vw;">
     <div style="font-size:15px;font-weight:600;margin-bottom:18px;color:var(--text)" id="login-modal-title">Login</div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Email</label>
-      <input id="login-email" type="email" placeholder="your@email.com"
-        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;">
+
+    <!-- Email/password (wattpad etc.) -->
+    <div id="login-fields">
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Email</label>
+        <input id="login-email" type="email" placeholder="your@email.com"
+          style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;">
+      </div>
+      <div style="margin-bottom:20px">
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Password</label>
+        <input id="login-password" type="password" placeholder="••••••••"
+          style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;">
+      </div>
     </div>
-    <div style="margin-bottom:20px">
-      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Password</label>
-      <input id="login-password" type="password" placeholder="••••••••"
-        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;">
+
+    <!-- Cookie paste (webnovel etc.) -->
+    <div id="cookie-field" style="display:none;margin-bottom:20px">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">
+        Paste cookies from browser
+        <span style="color:var(--blue);cursor:pointer;margin-left:6px" title="1. Go to webnovel.com and log in&#10;2. Open DevTools (F12) → Console&#10;3. Run: copy(document.cookie)&#10;4. Paste here">ⓘ how?</span>
+      </label>
+      <textarea id="login-cookies" rows="4" placeholder="Paste cookie string here..."
+        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:12px;outline:none;resize:vertical;font-family:monospace"></textarea>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Open webnovel.com → DevTools Console → type <code style="background:var(--bg);padding:1px 4px;border-radius:3px">copy(document.cookie)</code> → paste above</div>
     </div>
+
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button onclick="cancelLogin()" style="padding:7px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:13px">Cancel</button>
       <button onclick="submitLogin()" style="padding:7px 18px;border-radius:6px;border:none;background:var(--green);color:#fff;cursor:pointer;font-size:13px;font-weight:600">Start Scraping</button>
