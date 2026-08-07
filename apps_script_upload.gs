@@ -9,6 +9,7 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var filename = data.filename;
     var folderId = data.folder_id || FOLDER_ID;
+    var subfolderName = data.subfolder_name || "";
 
     var bytes = Utilities.base64Decode(data.content);
     var blob = Utilities.newBlob(
@@ -18,6 +19,16 @@ function doPost(e) {
     );
 
     var folder = DriveApp.getFolderById(folderId);
+
+    // Find or create a subfolder named after the book
+    if (subfolderName) {
+      var subFolders = folder.getFoldersByName(subfolderName);
+      if (subFolders.hasNext()) {
+        folder = subFolders.next();
+      } else {
+        folder = folder.createFolder(subfolderName);
+      }
+    }
 
     // Replace existing file if same name
     var existing = folder.getFilesByName(filename);

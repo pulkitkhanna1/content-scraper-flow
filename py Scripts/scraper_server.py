@@ -68,10 +68,10 @@ CHAPTERS_PER_FILE = 100
 
 GDRIVE_FOLDER_ID   = "1UyCUOcPTQLGSkII4DoEPd-_gKGZwLO9E"
 # Apps Script web app URL — set via env var or paste directly
-APPS_SCRIPT_URL    = os.environ.get("APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbxVW8CYPPopNWZvM3IKEuwjYqrWSzs_6tznwMsQj6gjT7h1antrYwxIzSNQhcfYHU0u/exec")
+APPS_SCRIPT_URL    = os.environ.get("APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbyHP8IS2ZTAabP0EVycUAYoXmYws0RFwRnOok1EEc5ZxcW1rp_tUZcbFdVtXaPIE9f2/exec")
 
 
-def upload_to_drive(file_path: str, folder_id: str, log_fn):
+def upload_to_drive(file_path: str, folder_id: str, log_fn, subfolder_name: str = ""):
     """Upload a .docx via Apps Script web app — no API keys needed."""
     if not APPS_SCRIPT_URL:
         log_fn("Drive upload skipped — set APPS_SCRIPT_URL env var first.")
@@ -83,7 +83,7 @@ def upload_to_drive(file_path: str, folder_id: str, log_fn):
             encoded = base64.b64encode(f.read()).decode("utf-8")
         resp = _requests.post(
             APPS_SCRIPT_URL,
-            json={"filename": name, "content": encoded, "folder_id": folder_id},
+            json={"filename": name, "content": encoded, "folder_id": folder_id, "subfolder_name": subfolder_name},
             timeout=60,
         )
         result = resp.json()
@@ -697,13 +697,14 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
     book_name = result.get("book_name") or "Novel"
     scraper_args = result.get("scraper_args", {})
 
+    safe = _safe_name(book_name)
+
     def on_file_complete(path):
         if use_drive:
             log(f"Uploading to Google Drive: {Path(path).name} ...")
-            upload_to_drive(path, GDRIVE_FOLDER_ID, log)
+            upload_to_drive(path, GDRIVE_FOLDER_ID, log, subfolder_name=safe)
 
     try:
-        safe = _safe_name(book_name)
         book_dir = os.path.join(out_dir, "scraped_novels", safe)
         os.makedirs(book_dir, exist_ok=True)
         _write_metadata_docx(book_dir, result, book_name, platform, start_ch, end_ch)
