@@ -892,6 +892,8 @@ def parse_args():
     parser.add_argument("--confirm-login", "-c", action="store_true",
                         help="Pause and wait for Enter after login before scraping.")
     parser.add_argument("--headless", action="store_true", help="Run Chrome headless.")
+    parser.add_argument("--email", default=None, help="Webnovel account email.")
+    parser.add_argument("--password", default=None, help="Webnovel account password.")
     return parser.parse_args()
 
 
@@ -920,7 +922,9 @@ def main():
         HEADLESS = True
 
     driver = create_driver(headless=HEADLESS)
-    submitted = open_login_and_submit(driver, EMAIL, PASSWORD, book_page)
+    email_to_use = args.email or EMAIL
+    password_to_use = args.password or PASSWORD
+    submitted = open_login_and_submit(driver, email_to_use, password_to_use, book_page)
     if submitted:
         wait_for_login(driver, timeout=WAIT_FOR_2FA_SECONDS)
     else:

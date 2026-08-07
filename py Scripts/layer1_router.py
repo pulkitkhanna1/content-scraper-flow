@@ -263,44 +263,49 @@ def extract_metadata_webnovel(url: str) -> dict:
     if not book_id:
         return {}
 
+    # Extract slug-based name from URL as a reliable fallback
+    # e.g. /book/shadow-slave_22196... → "Shadow Slave"
+    slug_name = ""
+    raw_slug = parts[i + 1] if i + 1 < len(parts) else ""
+    slug_part = re.sub(r"_\d+$", "", raw_slug)   # strip trailing _12345
+    if slug_part:
+        slug_name = " ".join(w.capitalize() for w in slug_part.replace("-", " ").split())
+
     api_url = f"https://www.webnovel.com/go/pcm/bookInfo/getBookWeb?bookId={book_id}"
     try:
         resp = requests.get(api_url, headers=HEADERS, timeout=15)
-        data = resp.json()
-        book = data.get("data", {}).get("bookInfo", {})
-        return {
-            "book_name": book.get("bookName", ""),
-            "author": book.get("authorName", ""),
-            "chapter_count": book.get("chapterCount", 0),
-            "description": book.get("description", ""),
-            "cover_url": book.get("coverUrl", ""),
-            "book_id": book_id,
-            "scraper_args": {
-                "book_url": f"https://www.webnovel.com/book/{book_id}",
-                "start_chapter": 1,
-                "end_chapter": book.get("chapterCount", 100),
-                "out_dir": book.get("bookName", f"webnovel_{book_id}"),
-            },
-        }
+        if resp.status_code == 200:
+            data = resp.json()
+            book = data.get("data", {}).get("bookInfo", {})
+            if book.get("bookName"):
+                return {
+                    "book_name": book.get("bookName", ""),
+                    "author": book.get("authorName", ""),
+                    "chapter_count": book.get("chapterCount", 0),
+                    "description": book.get("description", ""),
+                    "cover_url": book.get("coverUrl", ""),
+                    "book_id": book_id,
+                    "scraper_args": {
+                        "book_url": f"https://www.webnovel.com/book/{book_id}",
+                        "start_chapter": 1,
+                        "end_chapter": book.get("chapterCount", 100),
+                    },
+                }
     except Exception:
         pass
 
-    # Fallback: HTML scrape
-    soup = _fetch_html(f"https://www.webnovel.com/book/{book_id}")
-    if not soup:
-        return {}
+    # Fallback: use slug name from URL (API is login-gated)
     return {
-        "book_name": _text(soup, "h1.pt4", "h1", "title"),
-        "author": _text(soup, ".ell.c_s", "[class*='author']"),
+        "book_name": slug_name or f"webnovel_{book_id}",
+        "author": "",
         "chapter_count": 0,
-        "description": _text(soup, ".g_txt_2.br", "[class*='desc']"),
+        "description": "",
         "cover_url": "",
         "book_id": book_id,
         "scraper_args": {
             "book_url": f"https://www.webnovel.com/book/{book_id}",
             "start_chapter": 1,
             "end_chapter": 100,
-            "out_dir": "",
         },
     }
 

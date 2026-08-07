@@ -341,7 +341,14 @@ if __name__ == "__main__":
     _parser.add_argument("--start-chapter", type=int, default=1)
     _parser.add_argument("--end-chapter", type=int, default=500)
     _parser.add_argument("--output-dir", default=None, help="Output folder path")
+    _parser.add_argument("--email", default=None, help="Wattpad account email.")
+    _parser.add_argument("--password", default=None, help="Wattpad account password.")
     _args = _parser.parse_args()
+
+    if _args.email:
+        EMAIL = _args.email
+    if _args.password:
+        PASSWORD = _args.password
 
     try:
         print("🚀 Initializing Chrome driver...")

@@ -700,7 +700,7 @@ def _upload_dir_docx(book_dir: str, log_fn, subfolder_name: str = ""):
         upload_to_drive(str(f), GDRIVE_FOLDER_ID, log_fn, subfolder_name=subfolder_name)
 
 
-def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=False):
+def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=False, login_email="", login_password=""):
     job = _jobs[jid]
     log = lambda msg: job["log_queue"].put(str(msg))
     stop = job["stop_event"]
@@ -759,6 +759,10 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    "--out-dir", book_dir,
                    "--start-chapter", str(start_ch),
                    "--end-chapter", str(end_ch)]
+            if login_email:
+                cmd += ["--email", login_email]
+            if login_password:
+                cmd += ["--password", login_password]
             rc = _run_script(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
@@ -819,6 +823,10 @@ def _run_scrape_job(jid, platform, result, start_ch, end_ch, out_dir, use_drive=
                    "--start-chapter", str(start_ch),
                    "--end-chapter", str(end_ch),
                    "--output-dir", book_dir]
+            if login_email:
+                cmd += ["--email", login_email]
+            if login_password:
+                cmd += ["--password", login_password]
             rc = _run_script(cmd, log, stop)
             if use_drive and rc == 0:
                 _upload_dir_docx(book_dir, log, safe)
@@ -889,6 +897,8 @@ def api_scrape():
     end_ch     = int(data.get("end_ch", 100))
     out_dir    = os.path.expanduser(data.get("out_dir") or DEFAULT_OUT_DIR)
     use_drive  = bool(data.get("upload_to_drive", False))
+    login_email    = data.get("email", "").strip()
+    login_password = data.get("password", "").strip()
 
     if not platform:
         return jsonify({"error": "No detection result. Run Detect first."}), 400
@@ -897,7 +907,7 @@ def api_scrape():
     jid = _new_job()
     threading.Thread(
         target=_run_scrape_job,
-        args=(jid, platform, result, start_ch, end_ch, out_dir, use_drive),
+        args=(jid, platform, result, start_ch, end_ch, out_dir, use_drive, login_email, login_password),
         daemon=True,
     ).start()
     return jsonify({"job_id": jid})
@@ -1559,9 +1569,34 @@ function useUrl(url) {
 }
 
 // ── Scraping ──────────────────────────────────────────────────────────────────
-async function startScrape() {
-  if (!detectionResult) { log('Run Detect first.', 'err'); return; }
+const LOGIN_PLATFORMS = ['webnovel', 'wattpad'];
 
+function startScrape() {
+  if (!detectionResult) { log('Run Detect first.', 'err'); return; }
+  const platform = detectionResult.platform || '';
+  if (LOGIN_PLATFORMS.includes(platform)) {
+    document.getElementById('login-modal').style.display = 'flex';
+    document.getElementById('login-modal-title').textContent =
+      'Login — ' + platform.charAt(0).toUpperCase() + platform.slice(1);
+    document.getElementById('login-email').value = '';
+    document.getElementById('login-password').value = '';
+  } else {
+    _doScrape('', '');
+  }
+}
+
+function submitLogin() {
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value.trim();
+  document.getElementById('login-modal').style.display = 'none';
+  _doScrape(email, password);
+}
+
+function cancelLogin() {
+  document.getElementById('login-modal').style.display = 'none';
+}
+
+async function _doScrape(email, password) {
   const startCh = parseInt(document.getElementById('start-ch').value) || 1;
   const endCh   = parseInt(document.getElementById('end-ch').value)   || 100;
   const outDir  = '';
@@ -1582,6 +1617,8 @@ async function startScrape() {
         end_ch:   endCh,
         out_dir:  outDir,
         upload_to_drive: true,
+        email:    email,
+        password: password,
       })
     });
     const data = await res.json();
@@ -1666,6 +1703,27 @@ function setProgress(on) {
   document.getElementById('progress-wrap').classList.toggle('active', on);
 }
 </script>
+
+<!-- Login Modal -->
+<div id="login-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:28px 32px;width:340px;max-width:90vw;">
+    <div style="font-size:15px;font-weight:600;margin-bottom:18px;color:var(--text)" id="login-modal-title">Login</div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Email</label>
+      <input id="login-email" type="email" placeholder="your@email.com"
+        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;">
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Password</label>
+      <input id="login-password" type="password" placeholder="••••••••"
+        style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;">
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="cancelLogin()" style="padding:7px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:13px">Cancel</button>
+      <button onclick="submitLogin()" style="padding:7px 18px;border-radius:6px;border:none;background:var(--green);color:#fff;cursor:pointer;font-size:13px;font-weight:600">Start Scraping</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
 """
